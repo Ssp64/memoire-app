@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memoire — Event Photo Intelligence</title>
+<link rel="stylesheet" href="style.css">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js"></script>
+</head>
+<body>
+
+<!-- ─── SCANNING OVERLAY ─── -->
+<div class="scanning-overlay" id="scanning-overlay">
+  <div class="scan-ring-container">
+    <div class="scan-ring scan-ring-1"></div>
+    <div class="scan-ring scan-ring-2"></div>
+    <div class="scan-ring scan-ring-3"></div>
+    <div class="scan-ring-inner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 3h4a2 2 0 012 2v4M15 21h4a2 2 0 002-2v-4M9 3H5a2 2 0 00-2 2v4M9 21H5a2 2 0 01-2-2v-4"/><circle cx="12" cy="12" r="3"/></svg>
+    </div>
+  </div>
+  <div class="scanning-label" id="scanning-label">Analysing faces...</div>
+  <div class="scanning-sublabel" id="scanning-sublabel"></div>
+  <div class="scanning-progress"><div class="scanning-progress-bar" id="scan-progress-bar"></div></div>
+</div>
+
+<!-- ─── TOAST CONTAINER ─── -->
+<div class="toast-container" id="toasts"></div>
+
+<!-- ─── AUTH MODAL ─── -->
+<div class="modal-overlay" id="auth-modal">
+  <div class="modal auth-modal-inner">
+    <button class="modal-close" onclick="closeModal('auth-modal')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+
+    <div class="auth-brand">
+      <div class="auth-logo"><span>M</span>emoire</div>
+      <div class="auth-tagline">Event photo intelligence</div>
+    </div>
+
+    <div class="modal-tabs">
+      <button class="modal-tab active" id="tab-login" onclick="switchAuthTab('login')">Sign In</button>
+      <button class="modal-tab" id="tab-register" onclick="switchAuthTab('register')">Register</button>
+    </div>
+
+    <!-- SIGN IN -->
+    <div id="auth-login">
+      <div class="form-group">
+        <label class="form-label">Email Address</label>
+        <div class="input-wrap">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          <input class="form-input has-icon" type="email" placeholder="you@example.com" id="login-email" autocomplete="email" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <div class="input-wrap">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          <input class="form-input has-icon" type="password" placeholder="Your password" id="login-pass" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+          <button class="pw-toggle" type="button" onclick="togglePw('login-pass',this)" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="login-error" class="form-error" style="display:none"></div>
+      <button class="btn btn-primary btn-full" id="login-btn" onclick="doLogin()">Sign In</button>
+    </div>
+
+    <!-- REGISTER -->
+    <div id="auth-register" style="display:none">
+      <div class="form-group">
+        <label class="form-label">Full Name</label>
+        <div class="input-wrap">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          <input class="form-input has-icon" type="text" placeholder="Your full name" id="reg-name" autocomplete="name" onkeydown="if(event.key==='Enter')document.getElementById('reg-email').focus()">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email Address</label>
+        <div class="input-wrap">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          <input class="form-input has-icon" type="email" placeholder="you@example.com" id="reg-email" autocomplete="email" onkeydown="if(event.key==='Enter')document.getElementById('reg-pass').focus()">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <div class="input-wrap">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          <input class="form-input has-icon" type="password" placeholder="Min 6 characters" id="reg-pass" autocomplete="new-password" onkeydown="if(event.key==='Enter')document.getElementById('reg-confirm').focus()">
+          <button class="pw-toggle" type="button" onclick="togglePw('reg-pass',this)" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirm Password</label>
+        <div class="input-wrap">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          <input class="form-input has-icon" type="password" placeholder="Repeat password" id="reg-confirm" autocomplete="new-password" onkeydown="if(event.key==='Enter')doRegister()">
+        </div>
+      </div>
+      <div id="reg-error" class="form-error" style="display:none"></div>
+      <button class="btn btn-primary btn-full" id="reg-btn" onclick="doRegister()">Create Account</button>
+      <div class="form-footnote">By creating an account you agree to our terms of service.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── CREATE EVENT MODAL ─── -->
+<div class="modal-overlay" id="create-event-modal">
+  <div class="modal modal-wide">
+    <button class="modal-close" onclick="closeModal('create-event-modal')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+    <div class="modal-title">New Event</div>
+    <div class="modal-sub">Create a photo album with face-match sharing</div>
+    <div style="margin-top:1.8rem">
+      <div class="form-group">
+        <label class="form-label">Event Name</label>
+        <input class="form-input" type="text" placeholder="e.g. Sharma Wedding — Reception" id="new-event-name" onkeydown="if(event.key==='Enter')doCreateEvent()">
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Date</label>
+          <input class="form-input" type="date" id="new-event-date">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Location</label>
+          <input class="form-input" type="text" placeholder="City / Venue" id="new-event-loc">
+        </div>
+      </div>
+      <div id="create-event-error" class="form-error" style="display:none;margin-top:1rem"></div>
+      <div style="height:1.4rem"></div>
+      <button class="btn btn-primary btn-full" id="create-event-btn" onclick="doCreateEvent()">Create Event</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── LIGHTBOX ─── -->
+<div class="modal-overlay" id="lightbox" onclick="closeLightbox()">
+  <div class="lightbox-inner" onclick="event.stopPropagation()">
+    <button class="modal-close" style="color:var(--c4)" onclick="closeLightbox()">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+    <img id="lightbox-img" src="" alt="">
+    <div class="lightbox-meta" id="lightbox-meta"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     VIEW: LANDING
+════════════════════════════════════════════════════════════ -->
+<div class="view active" id="view-landing">
+  <nav>
+    <div class="logo" onclick="navigate('landing')"><span>M</span>emoire</div>
+    <div class="nav-actions">
+      <button class="btn btn-ghost" onclick="openModal('auth-modal')">Sign In</button>
+      <button class="btn btn-primary" onclick="openModal('auth-modal')">Get Started</button>
+    </div>
+  </nav>
+  <section class="hero">
+    <div class="hero-left">
+      <div class="hero-eyebrow">AI Face Recognition</div>
+      <h1 class="hero-title">Every face finds their <em>moments</em></h1>
+      <p class="hero-sub">Upload an event's complete photo archive. Share one link. Guests scan their face and instantly see every photo they appear in — even blurry group shots.</p>
+      <div class="hero-ctas">
+        <button class="btn btn-primary" onclick="openModal('auth-modal')">Create an Event</button>
+        <button class="btn btn-ghost" onclick="navigate('guest')">Try Guest View</button>
+      </div>
+    </div>
+    <div class="hero-right">
+      <div class="hero-visual">
+        <div class="photo-card photo-card-1"><div class="face-detect-dot"></div><div class="face-badge">Face detected</div></div>
+        <div class="photo-card photo-card-2"><div class="face-badge">3 matches</div></div>
+        <div class="photo-card photo-card-3"><div class="face-badge">Your photos</div></div>
+      </div>
+    </div>
+  </section>
+  <div class="features-strip">
+    <div class="feature-item">
+      <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 3h4a2 2 0 012 2v4M15 21h4a2 2 0 002-2v-4M9 3H5a2 2 0 00-2 2v4M9 21H5a2 2 0 01-2-2v-4"/><circle cx="12" cy="12" r="3"/></svg>
+      <div class="feature-title">Dual-Model Detection</div>
+      <div class="feature-desc">SSD-MobileNet + TinyFace run in parallel. Works on blurry photos, group shots, side profiles, and low-light images.</div>
+    </div>
+    <div class="feature-item">
+      <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+      <div class="feature-title">One Shareable Link</div>
+      <div class="feature-desc">No app download, no login for guests. One link, one face scan, instant personalised feed.</div>
+    </div>
+    <div class="feature-item">
+      <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+      <div class="feature-title">Client-Side Privacy</div>
+      <div class="feature-desc">All face matching happens in your browser. No biometric data is ever sent to or stored on any server.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     VIEW: DASHBOARD
+════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-dashboard">
+  <nav>
+    <div class="logo" onclick="navigate('dashboard')"><span>M</span>emoire</div>
+    <div class="nav-actions">
+      <div class="user-pill" id="user-pill">
+        <div class="user-avatar" id="user-avatar">?</div>
+        <span class="nav-user-name" id="nav-user-name"></span>
+        <div class="user-dropdown">
+          <button onclick="doLogout()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Sign Out
+          </button>
+        </div>
+      </div>
+    </div>
+  </nav>
+  <div class="dashboard-layout">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Navigation</div>
+        <div class="sidebar-item active" id="nav-events" onclick="showSection('events',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+          My Events
+          <span class="sidebar-badge" id="events-count">0</span>
+        </div>
+        <div class="sidebar-item" id="nav-upload" onclick="showSection('upload',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Upload Media
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Quick Actions</div>
+        <div class="sidebar-item" onclick="openModal('create-event-modal')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          New Event
+        </div>
+        <div class="sidebar-item" onclick="navigate('guest')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          Preview Guest View
+        </div>
+        <div class="sidebar-item" onclick="doLogout()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign Out
+        </div>
+      </div>
+    </aside>
+    <main class="main-content">
+
+      <!-- EVENTS SECTION -->
+      <div id="section-events">
+        <div class="page-header">
+          <div>
+            <div class="page-title">My Events</div>
+            <div class="page-sub" id="dash-welcome"></div>
+          </div>
+          <button class="btn btn-primary" onclick="openModal('create-event-modal')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:5px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New Event
+          </button>
+        </div>
+        <div class="stats-row">
+          <div class="stat-card"><div class="stat-label">Total Events</div><div class="stat-value" id="stat-events">0</div><div class="stat-sub">Active albums</div></div>
+          <div class="stat-card"><div class="stat-label">Total Photos</div><div class="stat-value" id="stat-photos">0</div><div class="stat-sub">Uploaded media</div></div>
+          <div class="stat-card"><div class="stat-label">Storage</div><div class="stat-value" style="font-size:1.4rem;padding-top:0.3rem">Supabase</div><div class="stat-sub">Cloud hosted</div></div>
+          <div class="stat-card"><div class="stat-label">Face Engine</div><div class="stat-value" style="font-size:1.1rem;padding-top:0.4rem">Dual Model</div><div class="stat-sub">SSD + TinyFace</div></div>
+        </div>
+        <div class="section-title">Your Events</div>
+        <div class="events-grid" id="events-grid"></div>
+      </div>
+
+      <!-- UPLOAD SECTION -->
+      <div id="section-upload" style="display:none">
+        <div class="page-header">
+          <div>
+            <div class="page-title">Upload Media</div>
+            <div class="page-sub">Add photos — face indexing happens automatically after upload</div>
+          </div>
+        </div>
+        <div style="max-width:680px">
+          <div class="form-group">
+            <label class="form-label">Select Event</label>
+            <select class="form-input form-select" id="upload-event-select">
+              <option value="">Choose an event...</option>
+            </select>
+          </div>
+          <div class="upload-zone" id="upload-zone" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
+            <input type="file" id="file-input" multiple accept="image/*,video/mp4,video/quicktime" onchange="handleFileInput(event)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="width:38px;height:38px;color:var(--text-dim);margin-bottom:1rem"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <div class="upload-zone-title">Drag files here or click to browse</div>
+            <div class="upload-zone-sub">JPG, PNG, WEBP, MP4, MOV — all photo qualities accepted</div>
+          </div>
+          <div class="upload-preview-grid" id="upload-preview"></div>
+          <div style="margin-top:1.5rem;display:flex;gap:1rem">
+            <button class="btn btn-primary" id="upload-submit-btn" onclick="doUploadFiles()" style="display:none">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:5px"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Upload to Event
+            </button>
+            <button class="btn btn-ghost" onclick="clearUpload()">Clear</button>
+          </div>
+          <div id="upload-progress-container" style="display:none;margin-top:1.2rem">
+            <div class="upload-progress-label" id="upload-progress-label"></div>
+            <div class="upload-progress-track"><div class="upload-progress-fill" id="upload-progress-fill"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EVENT DETAIL SECTION -->
+      <div id="section-detail" style="display:none">
+        <div style="margin-bottom:1.5rem">
+          <button class="btn btn-ghost btn-small" onclick="showSection('events',document.getElementById('nav-events'))">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px"><polyline points="15 18 9 12 15 6"/></svg>Back to Events
+          </button>
+        </div>
+        <div class="event-detail-header">
+          <div>
+            <div class="page-title" id="detail-name"></div>
+            <div class="page-sub" id="detail-meta"></div>
+            <div id="detail-chips" style="margin-top:0.8rem;display:flex;gap:0.5rem;flex-wrap:wrap"></div>
+          </div>
+          <div class="detail-right-panel">
+            <div class="share-link-box">
+              <div class="share-link-label">Guest Share Link</div>
+              <div class="share-link-row">
+                <span id="detail-share-link" class="share-link-text"></span>
+                <button class="icon-btn" onclick="copyShareLink()" title="Copy">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                </button>
+              </div>
+            </div>
+            <button class="btn btn-outline" style="width:100%" onclick="navigate('guest')">Preview Guest Experience</button>
+            <button class="btn btn-secondary" style="width:100%;font-size:0.62rem" onclick="reindexCurrentEvent()">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>Re-index Faces
+            </button>
+          </div>
+        </div>
+        <!-- Detail Tab Bar -->
+        <div class="detail-tabs" id="detail-tabs">
+          <button class="detail-tab active" id="detail-tab-photos" onclick="switchDetailTab('photos')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            All Photos
+            <span id="detail-photo-count" style="font-size:0.58rem;color:var(--accent);font-family:var(--font-mono);font-weight:400;letter-spacing:0;text-transform:none;margin-left:4px"></span>
+          </button>
+          <button class="detail-tab" id="detail-tab-people" onclick="switchDetailTab('people')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 014-4h4a4 4 0 014 4v2"/><path d="M16 3.13a4 4 0 010 7.75"/><path d="M21 21v-2a4 4 0 00-3-3.87"/></svg>
+            People
+            <span id="detail-people-count" style="font-size:0.58rem;color:var(--accent);font-family:var(--font-mono);font-weight:400;letter-spacing:0;text-transform:none;margin-left:4px"></span>
+          </button>
+        </div>
+
+        <!-- Photos panel -->
+        <div id="detail-panel-photos">
+        <div id="detail-media-grid" class="media-grid"></div>
+        <div id="detail-empty" class="empty-state" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          <div class="empty-state-title">No photos uploaded yet</div>
+          <div class="empty-state-sub">Upload photos to this event to get started</div>
+        </div>
+        </div><!-- /detail-panel-photos -->
+
+        <!-- People panel -->
+        <div id="detail-panel-people" style="display:none">
+          <div id="people-loading" class="empty-state" style="display:none">
+            <div class="btn-spinner" style="margin:0 auto 1rem;width:24px;height:24px;border-width:2px;animation:spin 0.7s linear infinite"></div>
+            <div class="empty-state-title">Clustering faces...</div>
+            <div class="empty-state-sub">Grouping people across all event photos</div>
+          </div>
+          <div id="people-grid" class="people-grid"></div>
+          <div id="people-empty" class="empty-state" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+            <div class="empty-state-title">No people detected yet</div>
+            <div class="empty-state-sub">Upload photos and run face indexing. People appear here once faces are detected.</div>
+          </div>
+        </div><!-- /detail-panel-people -->
+
+        <!-- Person detail (drill-down) -->
+        <div id="detail-panel-person" style="display:none">
+          <div style="margin-bottom:1.2rem">
+            <button class="btn btn-ghost btn-small" onclick="closePerson()">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px"><polyline points="15 18 9 12 15 6"/></svg>Back to People
+            </button>
+          </div>
+          <div class="person-detail-header">
+            <div class="person-detail-avatar" id="person-detail-avatar"></div>
+            <div>
+              <div class="person-detail-name" id="person-detail-name"></div>
+              <div class="person-detail-meta" id="person-detail-meta"></div>
+            </div>
+          </div>
+          <div id="person-media-grid" class="media-grid"></div>
+        </div><!-- /detail-panel-person -->
+
+        <div style="margin-top:2rem;display:flex;gap:1rem">
+          <button class="btn btn-secondary" onclick="goToUploadForEvent()">Add More Photos</button>
+          <button class="btn btn-danger" onclick="deleteCurrentEvent()">Delete Event</button>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     VIEW: GUEST
+════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-guest">
+  <nav>
+    <div class="logo"><span>M</span>emoire</div>
+    <div class="nav-actions">
+      <button class="btn btn-ghost" onclick="navigate('landing')">Home</button>
+    </div>
+  </nav>
+  <div class="guest-hero">
+    <div class="guest-event-name" id="guest-event-name">Event</div>
+    <div class="guest-event-meta" id="guest-event-meta"></div>
+  </div>
+  <div class="face-scan-container">
+
+    <div class="scan-steps">
+      <div class="scan-step active" id="step-1"><div class="scan-step-num">1</div><div class="scan-step-label">Scan Face</div></div>
+      <div class="scan-step" id="step-2"><div class="scan-step-num">2</div><div class="scan-step-label">Processing</div></div>
+      <div class="scan-step" id="step-3"><div class="scan-step-num">3</div><div class="scan-step-label">Your Photos</div></div>
+    </div>
+
+    <div class="scan-panel" id="scan-panel">
+      <div class="tab-switcher">
+        <button class="tab-btn active" id="tab-camera" onclick="switchScanMode('camera',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          Live Camera
+        </button>
+        <button class="tab-btn" id="tab-upload-face" onclick="switchScanMode('upload',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Upload Photo
+        </button>
+      </div>
+
+      <!-- CAMERA MODE -->
+      <div id="mode-camera" style="display:flex;flex-direction:column;align-items:center;gap:1rem">
+        <div class="camera-wrapper">
+          <video id="camera-feed" autoplay muted playsinline></video>
+          <canvas id="face-canvas"></canvas>
+          <div class="camera-corners">
+            <span class="corner tl"></span><span class="corner tr"></span>
+            <span class="corner bl"></span><span class="corner br"></span>
+          </div>
+        </div>
+        <div class="scan-status">
+          <div class="scan-dot"></div>
+          <span id="camera-status-text">Starting camera...</span>
+        </div>
+        <button class="btn btn-primary" id="capture-btn" onclick="captureAndMatch()" style="padding:0.75rem 2.5rem">
+          Capture and Find My Photos
+        </button>
+      </div>
+
+      <!-- UPLOAD MODE -->
+      <div id="mode-upload" style="display:none;flex-direction:column;align-items:center;gap:1.2rem">
+        <div class="upload-zone" id="face-drop-zone" style="max-width:320px;width:100%">
+          <input type="file" id="face-file-input" accept="image/*" onchange="handleFaceFileSelect(event)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="width:36px;height:36px;color:var(--text-dim);margin-bottom:0.8rem"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          <div class="upload-zone-title">Upload a clear photo of your face</div>
+          <div class="upload-zone-sub">Any quality works — we'll enhance and detect</div>
+        </div>
+        <div id="face-preview-wrap" style="display:none;flex-direction:column;align-items:center;gap:1rem">
+          <div style="position:relative;display:inline-block">
+            <img id="face-preview" style="width:150px;height:150px;object-fit:cover;border-radius:50%;border:2px solid var(--accent);display:block">
+            <div id="face-detect-indicator" style="display:none;position:absolute;bottom:4px;right:4px;background:var(--accent);border-radius:50%;width:24px;height:24px;align-items:center;justify-content:center">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+          </div>
+          <div id="face-detect-status" class="scan-status"><div class="scan-dot"></div><span>Checking for face...</span></div>
+          <button class="btn btn-primary" id="match-btn" onclick="runPhotoMatch()" style="padding:0.75rem 2.5rem;display:none">Find My Photos</button>
+          <button class="btn btn-ghost" style="font-size:0.65rem" onclick="resetFaceUpload()">Choose a different photo</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RESULTS -->
+    <div id="results-container" style="display:none;margin-top:2.5rem">
+      <div class="results-header-inner">
+        <div style="font-family:var(--font-serif);font-size:1.8rem;font-weight:300;color:var(--c4)">Your Photos</div>
+        <div id="results-count-label" style="font-family:var(--font-mono);font-size:0.65rem;color:var(--accent);letter-spacing:0.1em;margin-top:0.3rem"></div>
+      </div>
+      <div id="results-grid" class="results-grid"></div>
+      <div class="no-results-state" id="no-results" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        <div class="empty-state-title">No matches found</div>
+        <div class="empty-state-sub">Try a clearer photo, different lighting, or check that photos have been uploaded to this event.</div>
+      </div>
+      <div style="text-align:center;margin-top:2rem">
+        <button class="btn btn-ghost" onclick="resetGuestView()" style="font-size:0.7rem">Search Again</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Inline helpers needed before module loads
+function togglePw(inputId, btn) {
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  btn.classList.toggle('pw-visible');
+}
+</script>
+<script>
+  window.MEMOIRE_API_URL = 'https://backendsic-production.up.railway.app';
+  window.MEMOIRE_API_KEY = 'C27jkOiwikZcDtMJKB0sWJ7qm8jBbfmh0f1cGXOXXQyAD3wUkaJ8svMzdybFyC4v9q2khy65C8Z2IHBYA3orBiDzpLPyXQ6HzEITeOCqlTKvVcBfJAxXuRABaxrvu9zOmA9l8fet0a92aH3Ucvep1SkE4C0qsmLZMb8qkKqjeOvXTx2zozXGGTdyizbk69z';
+</script>
+<script src="app.js" type="module"></script>
+</body>
+</html>
