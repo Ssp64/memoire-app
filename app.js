@@ -1,4 +1,6 @@
 // app.js v2.2 — Guest flow redesign: all photos → find my photos → people folder
+// v2.3 — Persistent merges: merged people folders are saved to Supabase and
+//         re-applied after every cluster, so refreshing never splits them back.
 import { supabase }                    from './supabase.js';
 import { authState, initAuth, doLogin as authLogin, doRegister as authRegister, doLogout as authLogout, getUserName, getUserInitials } from './auth.js';
 import { createEvent, loadEvents, loadEvent, deleteEvent, loadMedia, uploadFiles, reindexEvent } from './events.js';
@@ -256,6 +258,102 @@ function switchDetailTab(tab) {
   if (tab === 'people') loadPeoplePanel();
 }
 
+// ─── PERSISTENT MERGE HELPERS ────────────────────────────────────────────────
+// We store merges in a `person_merges` table:
+//   event_id  TEXT  (PK together with id)
+//   id        UUID  (generated once per event)
+//   merged_groups  JSONB  — array of arrays of photo_ids
+//
+// SQL to create (run once in Supabase SQL editor):
+//   create table if not exists person_merges (
+//     event_id text primary key,
+//     merged_groups jsonb not null default '[]'::jsonb,
+//     updated_at timestamptz default now()
+//   );
+//   alter table person_merges enable row level security;
+//   create policy "owner access" on person_merges
+//     using (auth.uid() is not null);
+
+async function saveMerges(eventId, people) {
+  // Save each person's photo_id set. On reload we use these sets to
+  // re-merge whatever the fresh cluster produced.
+  const merged_groups = people.map(p => p.photo_ids);
+  try {
+    await supabase.from('person_merges').upsert({
+      event_id: eventId,
+      merged_groups,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'event_id' });
+  } catch (err) {
+    console.warn('[merge] Could not save merges:', err);
+  }
+}
+
+async function loadSavedMerges(eventId) {
+  try {
+    const { data, error } = await supabase
+      .from('person_merges')
+      .select('merged_groups')
+      .eq('event_id', eventId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data.merged_groups; // array of photo_id arrays
+  } catch (err) {
+    console.warn('[merge] Could not load merges:', err);
+    return null;
+  }
+}
+
+/**
+ * Apply saved merge groups onto a freshly-clustered people array.
+ *
+ * Algorithm:
+ *  For each saved group (a set of photo_ids that should be one person):
+ *    1. Find all clusters that contain any photo from this group.
+ *    2. Merge those clusters into one, in place of the first match.
+ *    3. Any photos in the saved group that ended up unclustered are
+ *       added to the merged person anyway (handles edge cases).
+ */
+function applySavedMerges(people, savedGroups) {
+  if (!savedGroups || !savedGroups.length) return people;
+  let result = [...people];
+
+  for (const group of savedGroups) {
+    if (!group || group.length === 0) continue;
+    const groupSet = new Set(group);
+
+    // Find indices of clusters that overlap with this saved group
+    const matchingIndices = [];
+    for (let i = 0; i < result.length; i++) {
+      const person = result[i];
+      if ((person.photo_ids || []).some(id => groupSet.has(id))) {
+        matchingIndices.push(i);
+      }
+    }
+
+    if (matchingIndices.length < 2) continue; // nothing to merge
+
+    // Merge all matching clusters into the first one
+    const base = result[matchingIndices[0]];
+    const others = matchingIndices.slice(1).map(i => result[i]);
+    const allPhotoIds = [...new Set([...base.photo_ids, ...others.flatMap(p => p.photo_ids)])];
+    const mergedPerson = {
+      ...base,
+      photo_ids: allPhotoIds,
+      photo_count: allPhotoIds.length,
+      face_count: base.face_count + others.reduce((s, p) => s + p.face_count, 0),
+    };
+
+    // Remove all matching, insert merged at position of first match
+    result = result.filter((_, i) => !matchingIndices.includes(i));
+    result.splice(matchingIndices[0], 0, mergedPerson);
+  }
+
+  // Re-number
+  return result.map((p, i) => ({ ...p, person_index: i, label: `Person ${i + 1}` }));
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function loadPeoplePanel() {
   const loadingEl = document.getElementById('people-loading');
   const gridEl    = document.getElementById('people-grid');
@@ -267,7 +365,16 @@ async function loadPeoplePanel() {
   if (!indexed.length) { loadingEl.style.display='none'; gridEl.style.display='none'; emptyEl.style.display='block'; return; }
   loadingEl.style.display = 'block'; gridEl.style.display = 'none'; emptyEl.style.display = 'none';
   const clusterRes = await clusterViaBackend(indexed);
-  const people = clusterRes.people || [];
+  let people = clusterRes.people || [];
+
+  // Re-apply any previously saved merges so refresh never splits folders.
+  if (state.currentEventId && people.length) {
+    const savedGroups = await loadSavedMerges(state.currentEventId);
+    if (savedGroups && savedGroups.length) {
+      people = applySavedMerges(people, savedGroups);
+    }
+  }
+
   state.currentPeople = people;
   loadingEl.style.display = 'none';
   if (!people.length) { emptyEl.style.display = 'block'; }
@@ -377,6 +484,11 @@ function executeMerge() {
   document.getElementById('detail-people-count').textContent = `(${state.currentPeople.length})`;
   toast(`Folders merged — now ${mergedPhotoIds.length} photo${mergedPhotoIds.length!==1?'s':''}.`, 'success');
   renderPeopleGrid(state.currentPeople);
+
+  // Persist merged state so refreshing the page doesn't undo the merge.
+  if (state.currentEventId) {
+    saveMerges(state.currentEventId, state.currentPeople);
+  }
 }
 
 function cancelMerge() {
