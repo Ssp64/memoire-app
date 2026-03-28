@@ -164,10 +164,17 @@ export function      clusterFaces()            { return [];   } // Replaced by c
 
 // ─── UTILITY ──────────────────────────────────────────────────────────────────
 function parseFaceEmbeddings(raw) {
-  if (!raw) return null;
+  if (raw == null) return null;
   try {
-    const p = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    // Handle double-serialized strings (legacy backend stored json.dumps() into jsonb)
+    let p = raw;
+    if (typeof p === 'string') p = JSON.parse(p);
+    if (typeof p === 'string') p = JSON.parse(p); // second pass for double-encoded
     if (!Array.isArray(p) || !p.length) return null;
-    return typeof p[0] === 'number' ? [p] : p; // wrap single flat array
+    // Flat array of numbers = single face embedding — wrap it
+    if (typeof p[0] === 'number') return [p];
+    // Array of arrays = multiple faces — filter out any malformed entries
+    const valid = p.filter(e => Array.isArray(e) && e.length > 0);
+    return valid.length ? valid : null;
   } catch { return null; }
 }
