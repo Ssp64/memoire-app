@@ -353,6 +353,14 @@
 
         <!-- People panel -->
         <div id="detail-panel-people" style="display:none">
+          <!-- Merge toolbar -->
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem">
+            <div id="people-merge-bar" style="display:none"></div>
+            <button id="merge-mode-btn" class="btn btn-outline" style="font-size:0.65rem;padding:0.35rem 0.9rem;margin-left:auto" onclick="toggleMergeMode()">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px"><path d="M8 6l4-4 4 4M12 2v13M4 17l2 2 4-4M14 15l4 4 2-2"/></svg>
+              Merge Folders
+            </button>
+          </div>
           <div id="people-loading" class="empty-state" style="display:none">
             <div class="btn-spinner" style="margin:0 auto 1rem;width:24px;height:24px;border-width:2px;animation:spin 0.7s linear infinite"></div>
             <div class="empty-state-title">Clustering faces...</div>
