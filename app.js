@@ -197,8 +197,14 @@ function renderEventCards(events) {
 }
 
 async function openEventDetail(id) {
+  // Only reset people if switching to a different event.
+  // Preserving currentPeople means the back button never triggers a re-cluster
+  // that could lose the in-memory merged state.
+  if (state.currentEventId !== id) {
+    state.currentPeople = [];
+    state.mergeLog = [];
+  }
   state.currentEventId = id;
-  state.currentPeople  = [];
   const ev = state.events.find(e=>e.id===id) || await loadEvent(id);
   if (!ev) return;
   document.getElementById('detail-name').textContent = ev.name;
@@ -315,49 +321,45 @@ async function loadSavedMerges(eventId) {
  */
 function applySavedMerges(people, mergeLog) {
   // mergeLog: array of {groupA:[...], groupB:[...]}
-  // Each entry records the two ORIGINAL photo_id sets that were merged.
-  // We find which current cluster best represents groupA and which represents
-  // groupB using MAJORITY matching — a cluster must contain >50% of a saved
-  // group's photos to qualify. This prevents F2 (which shares a few photos
-  // with F1 or F3) from being accidentally pulled in.
+  // Each entry records the two original photo_id sets at the moment of merge.
+  //
+  // Matching strategy: find the cluster with the MOST overlap with each saved
+  // group, with NO minimum threshold — even 1 matching photo qualifies.
+  // We then only merge the two BEST-matching clusters (one per group), so
+  // unrelated clusters that happen to share 1 photo are never pulled in.
+  // If both groups map to the same cluster, it's already merged — skip.
   if (!mergeLog || !mergeLog.length) return people;
   let result = [...people];
 
   function findBestCluster(clusters, savedGroup) {
-    // Returns the index of the cluster whose photo_ids overlap most with savedGroup,
-    // but only if the overlap covers at least 30% of the saved group (threshold).
+    // Returns index of cluster with highest raw overlap count with savedGroup.
+    // No threshold — we just need the single best match.
     const savedSet = new Set(savedGroup);
-    let bestIdx = -1, bestScore = 0;
+    let bestIdx = -1, bestCount = 0;
     for (let i = 0; i < clusters.length; i++) {
-      const ids = clusters[i].photo_ids || [];
-      const overlap = ids.filter(id => savedSet.has(id)).length;
-      // Score = overlap / size of saved group (how much of the saved group this cluster covers)
-      const score = savedGroup.length > 0 ? overlap / savedGroup.length : 0;
-      if (score > bestScore) { bestScore = score; bestIdx = i; }
+      const overlap = (clusters[i].photo_ids || []).filter(id => savedSet.has(id)).length;
+      if (overlap > bestCount) { bestCount = overlap; bestIdx = i; }
     }
-    // Require at least 30% coverage to avoid spurious matches
-    return bestScore >= 0.3 ? bestIdx : -1;
+    return bestIdx; // -1 if no overlap at all
   }
 
   for (const entry of mergeLog) {
-    const groupA = entry.groupA || entry.photoIds || []; // fallback for old format
+    const groupA = entry.groupA || entry.photoIds || [];
     const groupB = entry.groupB || [];
     if (!groupA.length && !groupB.length) continue;
 
-    const idxA = findBestCluster(result, groupA);
+    const idxA = groupA.length ? findBestCluster(result, groupA) : -1;
     const idxB = groupB.length ? findBestCluster(result, groupB) : -1;
 
-    // If both point to the same cluster, it's already merged — skip.
-    if (idxA === idxB) continue;
-    // If we can't find either side, skip.
-    if (idxA === -1 && idxB === -1) continue;
+    // Already in one cluster or nothing found
+    if (idxA === idxB || (idxA === -1 && idxB === -1)) continue;
 
-    // Collect the two found indices (filter out -1)
     const toMerge = [...new Set([idxA, idxB].filter(i => i !== -1))];
     if (toMerge.length < 2) continue;
 
-    const base = result[toMerge[0]];
-    const others = toMerge.slice(1).map(i => result[i]);
+    const minIdx = Math.min(...toMerge);
+    const base = result[minIdx];
+    const others = toMerge.filter(i => i !== minIdx).map(i => result[i]);
     const allPhotoIds = [...new Set([...base.photo_ids, ...others.flatMap(p => p.photo_ids)])];
     const mergedPerson = {
       ...base,
@@ -367,7 +369,7 @@ function applySavedMerges(people, mergeLog) {
     };
 
     result = result.filter((_, i) => !toMerge.includes(i));
-    result.splice(toMerge[0], 0, mergedPerson);
+    result.splice(minIdx, 0, mergedPerson);
   }
 
   return result.map((p, i) => ({ ...p, person_index: i, label: `Person ${i + 1}` }));
