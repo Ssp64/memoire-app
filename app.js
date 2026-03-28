@@ -11,7 +11,7 @@ const state = {
   events: [], currentEventId: null, currentMedia: [], currentPeople: [],
   selectedFiles: [], cameraStream: null, detectLoop: null, scanMode: 'upload',
   guestAllMedia: [], guestPeople: [],
-  mergeMode: false, mergeSelected: [],
+  mergeMode: false, mergeSelected: [], mergeLog: [],
 };
 
 // ─── SHARED HELPER — robust face_embeddings check ────────────────────────────
@@ -274,14 +274,13 @@ function switchDetailTab(tab) {
 //   create policy "owner access" on person_merges
 //     using (auth.uid() is not null);
 
-async function saveMerges(eventId, people) {
-  // Save each person's photo_id set. On reload we use these sets to
-  // re-merge whatever the fresh cluster produced.
-  const merged_groups = people.map(p => p.photo_ids);
+async function saveMerges(eventId, mergeLog) {
+  // mergeLog: array of {photoIds:[...]} — only explicitly user-merged groups.
+  // Each entry records which photo IDs were intentionally merged together.
   try {
     await supabase.from('person_merges').upsert({
       event_id: eventId,
-      merged_groups,
+      merged_groups: mergeLog,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'event_id' });
   } catch (err) {
@@ -314,26 +313,31 @@ async function loadSavedMerges(eventId) {
  *    3. Any photos in the saved group that ended up unclustered are
  *       added to the merged person anyway (handles edge cases).
  */
-function applySavedMerges(people, savedGroups) {
-  if (!savedGroups || !savedGroups.length) return people;
+function applySavedMerges(people, mergeLog) {
+  // mergeLog: array of {photoIds:[...]} — each entry is a set of photo IDs
+  // that the user explicitly merged into one person. We use these to find
+  // which fresh clusters should be collapsed, WITHOUT touching unrelated ones.
+  if (!mergeLog || !mergeLog.length) return people;
   let result = [...people];
 
-  for (const group of savedGroups) {
-    if (!group || group.length === 0) continue;
-    const groupSet = new Set(group);
+  for (const entry of mergeLog) {
+    const savedIds = entry.photoIds || entry; // support both {photoIds:[]} and raw array
+    if (!savedIds || savedIds.length === 0) continue;
+    const savedSet = new Set(savedIds);
 
-    // Find indices of clusters that overlap with this saved group
+    // Find which current clusters contain ANY photo from this saved merge group.
+    // Only those clusters get collapsed — unrelated clusters are untouched.
     const matchingIndices = [];
     for (let i = 0; i < result.length; i++) {
-      const person = result[i];
-      if ((person.photo_ids || []).some(id => groupSet.has(id))) {
+      if ((result[i].photo_ids || []).some(id => savedSet.has(id))) {
         matchingIndices.push(i);
       }
     }
 
-    if (matchingIndices.length < 2) continue; // nothing to merge
+    // Need at least 2 clusters to merge; if the cluster already absorbed them
+    // naturally (matchingIndices.length === 1), nothing to do.
+    if (matchingIndices.length < 2) continue;
 
-    // Merge all matching clusters into the first one
     const base = result[matchingIndices[0]];
     const others = matchingIndices.slice(1).map(i => result[i]);
     const allPhotoIds = [...new Set([...base.photo_ids, ...others.flatMap(p => p.photo_ids)])];
@@ -344,12 +348,10 @@ function applySavedMerges(people, savedGroups) {
       face_count: base.face_count + others.reduce((s, p) => s + p.face_count, 0),
     };
 
-    // Remove all matching, insert merged at position of first match
     result = result.filter((_, i) => !matchingIndices.includes(i));
     result.splice(matchingIndices[0], 0, mergedPerson);
   }
 
-  // Re-number
   return result.map((p, i) => ({ ...p, person_index: i, label: `Person ${i + 1}` }));
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -369,9 +371,10 @@ async function loadPeoplePanel() {
 
   // Re-apply any previously saved merges so refresh never splits folders.
   if (state.currentEventId && people.length) {
-    const savedGroups = await loadSavedMerges(state.currentEventId);
-    if (savedGroups && savedGroups.length) {
-      people = applySavedMerges(people, savedGroups);
+    const mergeLog = await loadSavedMerges(state.currentEventId);
+    if (mergeLog && mergeLog.length) {
+      state.mergeLog = mergeLog; // restore in-memory log so further merges append correctly
+      people = applySavedMerges(people, mergeLog);
     }
   }
 
@@ -485,9 +488,12 @@ function executeMerge() {
   toast(`Folders merged — now ${mergedPhotoIds.length} photo${mergedPhotoIds.length!==1?'s':''}.`, 'success');
   renderPeopleGrid(state.currentPeople);
 
-  // Persist merged state so refreshing the page doesn't undo the merge.
+  // Record this explicit merge action and persist it.
+  // We store the combined photo_ids of the just-merged pair so on reload
+  // we can find and re-collapse exactly those clusters — and nothing else.
+  state.mergeLog.push({ photoIds: mergedPhotoIds });
   if (state.currentEventId) {
-    saveMerges(state.currentEventId, state.currentPeople);
+    saveMerges(state.currentEventId, state.mergeLog);
   }
 }
 
