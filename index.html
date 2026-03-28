@@ -407,81 +407,8 @@
     <div class="guest-event-meta" id="guest-event-meta"></div>
   </div>
   <div class="face-scan-container">
-
-    <div class="scan-steps">
-      <div class="scan-step active" id="step-1"><div class="scan-step-num">1</div><div class="scan-step-label">Scan Face</div></div>
-      <div class="scan-step" id="step-2"><div class="scan-step-num">2</div><div class="scan-step-label">Processing</div></div>
-      <div class="scan-step" id="step-3"><div class="scan-step-num">3</div><div class="scan-step-label">Your Photos</div></div>
-    </div>
-
-    <div class="scan-panel" id="scan-panel">
-      <div class="tab-switcher">
-        <button class="tab-btn active" id="tab-camera" onclick="switchScanMode('camera',this)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
-          Live Camera
-        </button>
-        <button class="tab-btn" id="tab-upload-face" onclick="switchScanMode('upload',this)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          Upload Photo
-        </button>
-      </div>
-
-      <!-- CAMERA MODE -->
-      <div id="mode-camera" style="display:flex;flex-direction:column;align-items:center;gap:1rem">
-        <div class="camera-wrapper">
-          <video id="camera-feed" autoplay muted playsinline></video>
-          <canvas id="face-canvas"></canvas>
-          <div class="camera-corners">
-            <span class="corner tl"></span><span class="corner tr"></span>
-            <span class="corner bl"></span><span class="corner br"></span>
-          </div>
-        </div>
-        <div class="scan-status">
-          <div class="scan-dot"></div>
-          <span id="camera-status-text">Starting camera...</span>
-        </div>
-        <button class="btn btn-primary" id="capture-btn" onclick="captureAndMatch()" style="padding:0.75rem 2.5rem">
-          Capture and Find My Photos
-        </button>
-      </div>
-
-      <!-- UPLOAD MODE -->
-      <div id="mode-upload" style="display:none;flex-direction:column;align-items:center;gap:1.2rem">
-        <div class="upload-zone" id="face-drop-zone" style="max-width:320px;width:100%">
-          <input type="file" id="face-file-input" accept="image/*" onchange="handleFaceFileSelect(event)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="width:36px;height:36px;color:var(--text-dim);margin-bottom:0.8rem"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-          <div class="upload-zone-title">Upload a clear photo of your face</div>
-          <div class="upload-zone-sub">Any quality works — we'll enhance and detect</div>
-        </div>
-        <div id="face-preview-wrap" style="display:none;flex-direction:column;align-items:center;gap:1rem">
-          <div style="position:relative;display:inline-block">
-            <img id="face-preview" style="width:150px;height:150px;object-fit:cover;border-radius:50%;border:2px solid var(--accent);display:block">
-            <div id="face-detect-indicator" style="display:none;position:absolute;bottom:4px;right:4px;background:var(--accent);border-radius:50%;width:24px;height:24px;align-items:center;justify-content:center">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-            </div>
-          </div>
-          <div id="face-detect-status" class="scan-status"><div class="scan-dot"></div><span>Checking for face...</span></div>
-          <button class="btn btn-primary" id="match-btn" onclick="runPhotoMatch()" style="padding:0.75rem 2.5rem;display:none">Find My Photos</button>
-          <button class="btn btn-ghost" style="font-size:0.65rem" onclick="resetFaceUpload()">Choose a different photo</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- RESULTS -->
-    <div id="results-container" style="display:none;margin-top:2.5rem">
-      <div class="results-header-inner">
-        <div style="font-family:var(--font-serif);font-size:1.8rem;font-weight:300;color:var(--c4)">Your Photos</div>
-        <div id="results-count-label" style="font-family:var(--font-mono);font-size:0.65rem;color:var(--accent);letter-spacing:0.1em;margin-top:0.3rem"></div>
-      </div>
-      <div id="results-grid" class="results-grid"></div>
-      <div class="no-results-state" id="no-results" style="display:none">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-        <div class="empty-state-title">No matches found</div>
-        <div class="empty-state-sub">Try a clearer photo, different lighting, or check that photos have been uploaded to this event.</div>
-      </div>
-      <div style="text-align:center;margin-top:2rem">
-        <button class="btn btn-ghost" onclick="resetGuestView()" style="font-size:0.7rem">Search Again</button>
-      </div>
+    <div id="guest-main-container">
+      <!-- Populated by initGuestView() -->
     </div>
   </div>
 </div>
