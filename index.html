@@ -167,7 +167,6 @@
       <p class="hero-sub">Upload an event's complete photo archive. Share one link. Guests scan their face and instantly see every photo they appear in — even blurry group shots.</p>
       <div class="hero-ctas">
         <button class="btn btn-primary" onclick="openModal('auth-modal')">Create an Event</button>
-        <button class="btn btn-ghost" onclick="navigate('guest')">Try Guest View</button>
       </div>
     </div>
     <div class="hero-right">
@@ -235,10 +234,6 @@
         <div class="sidebar-item" onclick="openModal('create-event-modal')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
           New Event
-        </div>
-        <div class="sidebar-item" onclick="navigate('guest')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          Preview Guest View
         </div>
         <div class="sidebar-item" onclick="doLogout()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -327,7 +322,6 @@
                 </button>
               </div>
             </div>
-            <button class="btn btn-outline" style="width:100%" onclick="navigate('guest')">Preview Guest Experience</button>
             <button class="btn btn-secondary" style="width:100%;font-size:0.62rem" onclick="reindexCurrentEvent()">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>Re-index Faces
             </button>
