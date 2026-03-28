@@ -9,6 +9,7 @@ const state = {
   events: [], currentEventId: null, currentMedia: [], currentPeople: [],
   selectedFiles: [], cameraStream: null, detectLoop: null, scanMode: 'upload',
   guestAllMedia: [], guestPeople: [],
+  mergeMode: false, mergeSelected: [],
 };
 
 // ─── SHARED HELPER — robust face_embeddings check ────────────────────────────
@@ -35,6 +36,7 @@ Object.assign(window, {
   resetFaceUpload, resetGuestView, closeLightbox, openEventDetail,
   openLightbox, reindexCurrentEvent, switchDetailTab, closePerson, openPerson,
   removeMediaItem, showFindMyPhotos, downloadAllMatchedPhotos,
+  toggleMergeMode, selectPersonForMerge, executeMerge, cancelMerge,
 });
 
 async function boot() {
@@ -277,19 +279,112 @@ function renderPeopleGrid(people) {
   gridEl.style.display = 'grid';
   const photoMap = {};
   for (const m of state.currentMedia) photoMap[m.id] = m;
+
+  // Render merge toolbar
+  const mergeBar = document.getElementById('people-merge-bar');
+  if (mergeBar) {
+    if (state.mergeMode) {
+      const count = state.mergeSelected.length;
+      mergeBar.innerHTML = `
+        <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+          <span style="font-family:var(--font-mono);font-size:0.62rem;color:var(--accent)">
+            SELECT 2 FOLDERS TO MERGE ${count > 0 ? '— ' + count + ' selected' : ''}
+          </span>
+          ${count === 2 ? `<button class="btn btn-primary" style="font-size:0.65rem;padding:0.35rem 1rem" onclick="executeMerge()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px"><path d="M8 6l4-4 4 4M12 2v13M4 17l2 2 4-4M14 15l4 4 2-2"/></svg>
+            Merge Folders
+          </button>` : ''}
+          <button class="btn btn-ghost" style="font-size:0.65rem;padding:0.35rem 0.75rem" onclick="cancelMerge()">Cancel</button>
+        </div>`;
+      mergeBar.style.display = 'block';
+    } else {
+      mergeBar.style.display = 'none';
+    }
+  }
+
   gridEl.innerHTML = people.map((p, i) => {
     const repPhoto = photoMap[p.photo_ids?.[0]] || { url: p.representative_url };
     const thumbUrl = repPhoto?.url || p.representative_url || '';
-    return `<div class="person-card" onclick="openPerson(${i})">
+    const isSelected = state.mergeSelected.includes(i);
+    const clickHandler = state.mergeMode ? `selectPersonForMerge(${i})` : `openPerson(${i})`;
+    return `<div class="person-card${isSelected ? ' person-card-selected' : ''}" onclick="${clickHandler}" style="${state.mergeMode ? 'cursor:pointer' : ''}">
       <div class="person-thumb">
-        ${thumbUrl?`<img src="${thumbUrl}" alt="Person ${p.person_index+1}" loading="lazy">`:`<div class="person-thumb-fallback">P${p.person_index+1}</div>`}
+        ${thumbUrl ? `<img src="${thumbUrl}" alt="Person ${p.person_index+1}" loading="lazy">` : `<div class="person-thumb-fallback">P${p.person_index+1}</div>`}
         <div class="person-face-ring"></div>
+        ${isSelected ? `<div style="position:absolute;inset:0;background:rgba(168,144,128,0.45);border-radius:50%;display:flex;align-items:center;justify-content:center">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>` : ''}
       </div>
       <div class="person-label">Person ${p.person_index + 1}</div>
       <div class="person-count">${p.photo_count} photo${p.photo_count!==1?'s':''}</div>
     </div>`;
   }).join('');
   staggerIn(gridEl, '.person-card', 40);
+}
+
+function toggleMergeMode() {
+  state.mergeMode = !state.mergeMode;
+  state.mergeSelected = [];
+  const btn = document.getElementById('merge-mode-btn');
+  if (btn) btn.classList.toggle('active', state.mergeMode);
+  renderPeopleGrid(state.currentPeople);
+}
+
+function selectPersonForMerge(index) {
+  if (!state.mergeMode) return;
+  const pos = state.mergeSelected.indexOf(index);
+  if (pos > -1) {
+    state.mergeSelected.splice(pos, 1); // deselect
+  } else if (state.mergeSelected.length < 2) {
+    state.mergeSelected.push(index);
+  } else {
+    toast('Only select 2 folders to merge.', 'error');
+    return;
+  }
+  renderPeopleGrid(state.currentPeople);
+}
+
+function executeMerge() {
+  if (state.mergeSelected.length !== 2) return;
+  const [ia, ib] = state.mergeSelected;
+  const pa = state.currentPeople[ia];
+  const pb = state.currentPeople[ib];
+  if (!pa || !pb) return;
+
+  // Merge pb into pa
+  const mergedPhotoIds = [...new Set([...pa.photo_ids, ...pb.photo_ids])];
+  const mergedPerson = {
+    ...pa,
+    photo_ids: mergedPhotoIds,
+    photo_count: mergedPhotoIds.length,
+    face_count: pa.face_count + pb.face_count,
+  };
+
+  // Remove both, insert merged at the position of the first
+  const minIdx = Math.min(ia, ib);
+  const newPeople = state.currentPeople.filter((_, i) => i !== ia && i !== ib);
+  newPeople.splice(minIdx, 0, mergedPerson);
+
+  // Re-number
+  state.currentPeople = newPeople.map((p, i) => ({ ...p, person_index: i, label: `Person ${i+1}` }));
+
+  // Exit merge mode
+  state.mergeMode = false;
+  state.mergeSelected = [];
+  const btn = document.getElementById('merge-mode-btn');
+  if (btn) btn.classList.remove('active');
+
+  document.getElementById('detail-people-count').textContent = `(${state.currentPeople.length})`;
+  toast(`Folders merged — now ${mergedPhotoIds.length} photo${mergedPhotoIds.length!==1?'s':''}.`, 'success');
+  renderPeopleGrid(state.currentPeople);
+}
+
+function cancelMerge() {
+  state.mergeMode = false;
+  state.mergeSelected = [];
+  const btn = document.getElementById('merge-mode-btn');
+  if (btn) btn.classList.remove('active');
+  renderPeopleGrid(state.currentPeople);
 }
 
 function openPerson(personIndex) {
