@@ -1,25 +1,37 @@
-// face.js v2.0 — Production Face Intelligence Client
-// All heavy AI is now delegated to the Python/InsightFace backend.
+// face.js — Face Intelligence Client
+// All heavy AI is delegated to the Python/InsightFace backend.
 //
-// What changed vs v1 (face-api.js):
-//   ✗ No more 40MB model downloads in the browser
-//   ✗ No more unreliable browser-side WASM inference
-//   ✓ ArcFace 512-d embeddings (vs 128-d FaceNet) — far better accuracy
-//   ✓ RetinaFace detector — better at small/occluded/group faces
-//   ✓ DBSCAN clustering — Google Photos quality grouping
-//   ✓ Multi-augmentation probe — robust selfie matching
-//
-// Configuration: set these on window before loading this module.
+// Config: set on window before this module loads.
 //   window.MEMOIRE_API_URL = 'https://your-backend.railway.app'
 //   window.MEMOIRE_API_KEY = 'your-api-key'
 
 const BACKEND_URL = (window.MEMOIRE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
-const getHeaders  = () => ({
-  'Content-Type': 'application/json',
-  'X-API-Key': window.MEMOIRE_API_KEY || '',
-});
 
-// ─── 1. INDEX A SINGLE IMAGE (called after each upload) ───────────────────────
+function getHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'X-API-Key': window.MEMOIRE_API_KEY || '',
+  };
+}
+
+// ─── Parse face embeddings from Supabase ─────────────────────────────────────
+// Handles: null, JSON string, double-encoded string, flat array, array of arrays
+export function parseFaceEmbeddings(raw) {
+  if (raw == null) return null;
+  try {
+    let p = raw;
+    if (typeof p === 'string') p = JSON.parse(p);
+    if (typeof p === 'string') p = JSON.parse(p); // double-encoded
+    if (!Array.isArray(p) || !p.length) return null;
+    if (typeof p[0] === 'number') return [p]; // flat single embedding
+    const valid = p.filter(e => Array.isArray(e) && e.length > 10);
+    return valid.length ? valid : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── 1. Index a single image ──────────────────────────────────────────────────
 export async function indexImageViaBackend(mediaId, url, eventId) {
   try {
     const res = await fetch(`${BACKEND_URL}/api/v1/faces/index`, {
@@ -35,7 +47,7 @@ export async function indexImageViaBackend(mediaId, url, eventId) {
   }
 }
 
-// ─── 2. BATCH INDEX (called after bulk upload — much more efficient) ───────────
+// ─── 2. Batch index images ────────────────────────────────────────────────────
 export async function batchIndexViaBackend(items) {
   try {
     const res = await fetch(`${BACKEND_URL}/api/v1/faces/index/batch`, {
@@ -51,9 +63,7 @@ export async function batchIndexViaBackend(items) {
   }
 }
 
-// ─── 3. MATCH SELFIE AGAINST GALLERY ──────────────────────────────────────────
-// Gallery rows are passed from the client (already fetched from Supabase),
-// so the backend doesn't need its own DB round-trip per match.
+// ─── 3. Match selfie against gallery ─────────────────────────────────────────
 export async function matchViaBackend(imageBase64, galleryItems, threshold = null) {
   const payload = {
     image_base64: imageBase64,
@@ -79,11 +89,17 @@ export async function matchViaBackend(imageBase64, galleryItems, threshold = nul
     return await res.json();
   } catch (err) {
     console.error('[face] match failed:', err);
-    return { matches: [], total_gallery: galleryItems.length, indexed_gallery: 0, probe_found: false, threshold_used: threshold || 0.40 };
+    return {
+      matches: [],
+      total_gallery: galleryItems.length,
+      indexed_gallery: 0,
+      probe_found: false,
+      threshold_used: threshold || 0.50,
+    };
   }
 }
 
-// ─── 4. CLUSTER FACES INTO PEOPLE (Google Photos style) ───────────────────────
+// ─── 4. Cluster faces into people ────────────────────────────────────────────
 export async function clusterViaBackend(mediaItems, options = {}) {
   const payload = {
     media_items: mediaItems.map(item => ({
@@ -95,7 +111,7 @@ export async function clusterViaBackend(mediaItems, options = {}) {
       storage_path: item.storage_path || null,
       face_embeddings: parseFaceEmbeddings(item.face_embeddings),
     })),
-    ...(options.epsilon   != null ? { epsilon: options.epsilon }         : {}),
+    ...(options.epsilon     != null ? { epsilon: options.epsilon }         : {}),
     ...(options.min_samples != null ? { min_samples: options.min_samples } : {}),
   };
 
@@ -109,11 +125,11 @@ export async function clusterViaBackend(mediaItems, options = {}) {
     return await res.json();
   } catch (err) {
     console.error('[face] cluster failed:', err);
-    return { people: [], total_faces: 0, total_people: 0, epsilon_used: 0.45 };
+    return { people: [], total_faces: 0, total_people: 0, epsilon_used: 0.60 };
   }
 }
 
-// ─── 5. HEALTH CHECK ──────────────────────────────────────────────────────────
+// ─── 5. Health check ─────────────────────────────────────────────────────────
 export async function checkBackendHealth() {
   try {
     const res  = await fetch(`${BACKEND_URL}/health/`);
@@ -124,8 +140,7 @@ export async function checkBackendHealth() {
   }
 }
 
-// ─── 6. CAMERA OVERLAY (lightweight — no model download) ──────────────────────
-// Just draws the UI reticle. Real detection happens server-side on capture.
+// ─── 6. Camera overlay ───────────────────────────────────────────────────────
 export async function drawCameraOverlay(videoEl, canvasEl) {
   const ctx = canvasEl.getContext('2d');
   if (canvasEl.width !== videoEl.videoWidth) {
@@ -142,39 +157,26 @@ export async function drawCameraOverlay(videoEl, canvasEl) {
   ctx.strokeStyle = 'rgba(211,218,217,0.75)';
   ctx.lineWidth   = 2.5;
 
-  [[x,y,1,1],[x+size,y,-1,1],[x,y+size,1,-1],[x+size,y+size,-1,-1]].forEach(([bx,by,dx,dy]) => {
-    ctx.beginPath();
-    ctx.moveTo(bx, by + dy * cs); ctx.lineTo(bx, by); ctx.lineTo(bx + dx * cs, by);
-    ctx.stroke();
-  });
+  [[x, y, 1, 1], [x + size, y, -1, 1], [x, y + size, 1, -1], [x + size, y + size, -1, -1]]
+    .forEach(([bx, by, dx, dy]) => {
+      ctx.beginPath();
+      ctx.moveTo(bx, by + dy * cs);
+      ctx.lineTo(bx, by);
+      ctx.lineTo(bx + dx * cs, by);
+      ctx.stroke();
+    });
 
-  // Pulsing center dot
   ctx.fillStyle = 'rgba(168,144,128,0.5)';
-  ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+  ctx.fill();
 
   return true;
 }
 
-// ─── 7. LEGACY SHIMS (keep app.js working without changes) ────────────────────
-export async function loadModels()              { return true; } // No-op: backend handles
-export async function descriptorFromDataURL()  { return null; } // Replaced by matchViaBackend
-export async function allDescriptorsFromURL()  { return [];   } // Replaced by indexImageViaBackend
-export function      matchDescriptor()         { return [];   } // Replaced by matchViaBackend
-export function      clusterFaces()            { return [];   } // Replaced by clusterViaBackend
-
-// ─── UTILITY ──────────────────────────────────────────────────────────────────
-function parseFaceEmbeddings(raw) {
-  if (raw == null) return null;
-  try {
-    // Handle double-serialized strings (legacy backend stored json.dumps() into jsonb)
-    let p = raw;
-    if (typeof p === 'string') p = JSON.parse(p);
-    if (typeof p === 'string') p = JSON.parse(p); // second pass for double-encoded
-    if (!Array.isArray(p) || !p.length) return null;
-    // Flat array of numbers = single face embedding — wrap it
-    if (typeof p[0] === 'number') return [p];
-    // Array of arrays = multiple faces — filter out any malformed entries
-    const valid = p.filter(e => Array.isArray(e) && e.length > 0);
-    return valid.length ? valid : null;
-  } catch { return null; }
-}
+// ─── Legacy shims ─────────────────────────────────────────────────────────────
+export async function loadModels()             { return true; }
+export async function descriptorFromDataURL()  { return null; }
+export async function allDescriptorsFromURL()  { return [];   }
+export function      matchDescriptor()         { return [];   }
+export function      clusterFaces()            { return [];   }
