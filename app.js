@@ -11,6 +11,19 @@ const state = {
   guestAllMedia: [], guestPeople: [],
 };
 
+// ─── SHARED HELPER — robust face_embeddings check ────────────────────────────
+// Handles both native jsonb arrays and legacy double-serialized strings.
+function hasIndexedFaces(m) {
+  try {
+    let p = m.face_embeddings;
+    if (p == null) return false;
+    if (typeof p === 'string') p = JSON.parse(p);
+    if (typeof p === 'string') p = JSON.parse(p); // double-encoded legacy
+    return Array.isArray(p) && p.length > 0;
+  } catch { return false; }
+}
+
+
 Object.assign(window, {
   navigate, openModal, closeModal, switchAuthTab: _switchAuthTab,
   doLogin: handleLogin, doRegister: handleRegister, doLogout: handleLogout,
@@ -247,7 +260,7 @@ async function loadPeoplePanel() {
   const emptyEl   = document.getElementById('people-empty');
   if (state.currentPeople.length > 0) { renderPeopleGrid(state.currentPeople); return; }
   const indexed = (state.currentMedia||[]).filter(m => {
-    try { const p = typeof m.face_embeddings==='string' ? JSON.parse(m.face_embeddings) : m.face_embeddings; return Array.isArray(p) && p.length > 0; } catch { return false; }
+    return hasIndexedFaces(m);
   });
   if (!indexed.length) { loadingEl.style.display='none'; gridEl.style.display='none'; emptyEl.style.display='block'; return; }
   loadingEl.style.display = 'block'; gridEl.style.display = 'none'; emptyEl.style.display = 'none';
@@ -447,7 +460,7 @@ async function initGuestView() {
 
   // Also load people clusters in background
   const indexed = state.guestAllMedia.filter(m => {
-    try { const p = typeof m.face_embeddings==='string' ? JSON.parse(m.face_embeddings) : m.face_embeddings; return Array.isArray(p) && p.length > 0; } catch { return false; }
+    return hasIndexedFaces(m);
   });
   if (indexed.length) {
     clusterViaBackend(indexed).then(res => { state.guestPeople = res.people || []; });
@@ -665,7 +678,7 @@ async function performFaceMatch(dataURL) {
 
   const gallery = allMedia || [];
   const indexed = gallery.filter(m => {
-    try { const p=typeof m.face_embeddings==='string'?JSON.parse(m.face_embeddings):m.face_embeddings; return Array.isArray(p)&&p.length>0; } catch { return false; }
+    return hasIndexedFaces(m);
   });
 
   if (!indexed.length) {
