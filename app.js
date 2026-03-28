@@ -1,4 +1,4 @@
-// app.js v2.1 — Main application controller (UI glitch fixes)
+// app.js v2.2 — Guest flow redesign: all photos → find my photos → people folder
 import { supabase }                    from './supabase.js';
 import { authState, initAuth, doLogin as authLogin, doRegister as authRegister, doLogout as authLogout, getUserName, getUserInitials } from './auth.js';
 import { createEvent, loadEvents, loadEvent, deleteEvent, loadMedia, uploadFiles, reindexEvent } from './events.js';
@@ -7,7 +7,8 @@ import { toast, showScanning, hideScanning, openModal, closeModal, switchAuthTab
 
 const state = {
   events: [], currentEventId: null, currentMedia: [], currentPeople: [],
-  selectedFiles: [], cameraStream: null, detectLoop: null, scanMode: 'camera',
+  selectedFiles: [], cameraStream: null, detectLoop: null, scanMode: 'upload',
+  guestAllMedia: [], guestPeople: [],
 };
 
 Object.assign(window, {
@@ -20,14 +21,13 @@ Object.assign(window, {
   switchScanMode, captureAndMatch, handleFaceFileSelect, runPhotoMatch,
   resetFaceUpload, resetGuestView, closeLightbox, openEventDetail,
   openLightbox, reindexCurrentEvent, switchDetailTab, closePerson, openPerson,
-  removeMediaItem,
+  removeMediaItem, showFindMyPhotos, downloadAllMatchedPhotos,
 });
 
 async function boot() {
   document.body.style.opacity = '0';
   loadModels().catch(() => {});
 
-  // FIX: Check if this is a guest share link BEFORE auth init
   const params = new URLSearchParams(location.search);
   const eventParam = params.get('event');
 
@@ -35,7 +35,6 @@ async function boot() {
   document.body.style.transition = 'opacity 0.3s ease';
   document.body.style.opacity    = '1';
 
-  // FIX: If share link, go straight to guest view — no login prompt
   if (eventParam) {
     state.currentEventId = eventParam;
     navigate('guest');
@@ -46,22 +45,17 @@ async function boot() {
 }
 
 function onAuthStateChanged(event, user, prevUser) {
-  // FIX: Don't redirect to landing if on guest view (share link)
   if (event === 'SIGNED_IN' && !prevUser) {
     const params = new URLSearchParams(location.search);
     if (!params.get('event')) navigate('dashboard');
   } else if (event === 'SIGNED_OUT') {
     const params = new URLSearchParams(location.search);
-    // FIX: Don't log out of guest view on token expiry
     if (!params.get('event')) navigate('landing');
   }
 }
 
-// FIX: Prevent auto-logout by refreshing session proactively every 10 minutes
 setInterval(async () => {
-  if (authState.user) {
-    await supabase.auth.refreshSession();
-  }
+  if (authState.user) await supabase.auth.refreshSession();
 }, 10 * 60 * 1000);
 
 boot();
@@ -202,7 +196,6 @@ async function openEventDetail(id) {
   showSection('detail', null);
 }
 
-// FIX: Extracted media refresh so it can be called without re-opening the whole detail
 async function refreshMediaGrid(id) {
   const media = await loadMedia(id);
   state.currentMedia = media;
@@ -226,18 +219,14 @@ async function refreshMediaGrid(id) {
   }
 }
 
-// FIX: Delete individual photo
 async function removeMediaItem(mediaId, storagePath) {
   if (!confirm('Remove this photo? This cannot be undone.')) return;
   if (storagePath) await supabase.storage.from('event-media').remove([storagePath]);
   await supabase.from('media').delete().eq('id', mediaId);
-  // Remove from local state
   state.currentMedia = state.currentMedia.filter(m => m.id !== mediaId);
-  // Remove from DOM without full reload
   const el = document.querySelector(`.media-item[data-id="${mediaId}"]`);
   if (el) { el.style.opacity='0'; el.style.transform='scale(0.8)'; setTimeout(()=>el.remove(), 200); }
   toast('Photo removed.', 'success');
-  // Update count
   document.getElementById('detail-photo-count').textContent = `(${state.currentMedia.length})`;
 }
 
@@ -256,29 +245,18 @@ async function loadPeoplePanel() {
   const loadingEl = document.getElementById('people-loading');
   const gridEl    = document.getElementById('people-grid');
   const emptyEl   = document.getElementById('people-empty');
-
   if (state.currentPeople.length > 0) { renderPeopleGrid(state.currentPeople); return; }
-
   const indexed = (state.currentMedia||[]).filter(m => {
     try { const p = typeof m.face_embeddings==='string' ? JSON.parse(m.face_embeddings) : m.face_embeddings; return Array.isArray(p) && p.length > 0; } catch { return false; }
   });
-
   if (!indexed.length) { loadingEl.style.display='none'; gridEl.style.display='none'; emptyEl.style.display='block'; return; }
-
-  loadingEl.style.display = 'block';
-  gridEl.style.display    = 'none';
-  emptyEl.style.display   = 'none';
-
+  loadingEl.style.display = 'block'; gridEl.style.display = 'none'; emptyEl.style.display = 'none';
   const clusterRes = await clusterViaBackend(indexed);
   const people = clusterRes.people || [];
   state.currentPeople = people;
-
   loadingEl.style.display = 'none';
   if (!people.length) { emptyEl.style.display = 'block'; }
-  else {
-    document.getElementById('detail-people-count').textContent = `(${people.length})`;
-    renderPeopleGrid(people);
-  }
+  else { document.getElementById('detail-people-count').textContent = `(${people.length})`; renderPeopleGrid(people); }
 }
 
 function renderPeopleGrid(people) {
@@ -332,7 +310,6 @@ async function reindexCurrentEvent() {
   if (!state.currentEventId) return;
   state.currentPeople = [];
   await reindexEvent(state.currentEventId);
-  // FIX: Refresh media grid in place — don't navigate away
   await refreshMediaGrid(state.currentEventId);
 }
 
@@ -427,52 +404,179 @@ async function handleUploadFiles() {
   if (!eventId) { toast('Please select an event first.', 'error'); return; }
   if (!state.selectedFiles.length) { toast('No files selected.', 'error'); return; }
   const ok = await uploadFiles(eventId, state.selectedFiles);
-  if (ok) {
-    state.selectedFiles=[]; renderUploadPreview();
-    // FIX: After upload, stay on upload section — don't navigate away
-    toast('Upload complete! Go to your event to view photos.', 'success');
-  }
+  if (ok) { state.selectedFiles=[]; renderUploadPreview(); }
 }
 
-// ─── GUEST VIEW ───────────────────────────────────────────────────────────────
+// ─── GUEST VIEW (NEW FLOW) ────────────────────────────────────────────────────
+// Flow: All photos → Find My Photos button → scan face → show matched people folder
+
 async function initGuestView() {
-  resetGuestView();
+  state.guestAllMedia = [];
+  state.guestPeople   = [];
+
   const id = state.currentEventId || new URLSearchParams(location.search).get('event');
   state.currentEventId = id;
+
+  // Set event name
+  const guestContainer = document.getElementById('guest-main-container');
+  if (guestContainer) guestContainer.innerHTML = guestLoadingHTML();
+
+  let evName = 'Event', evMeta = '';
   if (id) {
     const ev = state.events.find(e=>e.id===id) || await loadEvent(id);
     if (ev) {
-      document.getElementById('guest-event-name').textContent = ev.name;
-      document.getElementById('guest-event-meta').textContent = [ev.date,ev.location].filter(Boolean).join(' — ');
+      evName = ev.name;
+      evMeta = [ev.date, ev.location].filter(Boolean).join(' — ');
     }
-  } else {
-    document.getElementById('guest-event-name').textContent = 'Event';
-    document.getElementById('guest-event-meta').textContent = '';
   }
-  // FIX: Default to upload tab on guest view (more reliable than camera)
-  switchScanMode('upload', document.getElementById('tab-upload'));
+
+  document.getElementById('guest-event-name').textContent = evName;
+  document.getElementById('guest-event-meta').textContent = evMeta;
+
+  if (!id) {
+    if (guestContainer) guestContainer.innerHTML = `<div style="text-align:center;padding:4rem;color:var(--text-dim)">No event found. Ask for a valid share link.</div>`;
+    return;
+  }
+
+  // Load all media for this event
+  const { data: media } = await supabase.from('media')
+    .select('*').eq('event_id', id).eq('file_type', 'image')
+    .order('created_at', { ascending: false });
+
+  state.guestAllMedia = media || [];
+
+  // Also load people clusters in background
+  const indexed = state.guestAllMedia.filter(m => {
+    try { const p = typeof m.face_embeddings==='string' ? JSON.parse(m.face_embeddings) : m.face_embeddings; return Array.isArray(p) && p.length > 0; } catch { return false; }
+  });
+  if (indexed.length) {
+    clusterViaBackend(indexed).then(res => { state.guestPeople = res.people || []; });
+  }
+
+  // Render all photos + Find My Photos button
+  if (guestContainer) guestContainer.innerHTML = guestAllPhotosHTML(state.guestAllMedia);
 }
 
-function resetGuestView() {
-  setStep(1);
-  document.getElementById('results-container').style.display = 'none';
-  document.getElementById('scan-panel').style.display        = 'flex';
-  resetFaceUpload();
+function guestLoadingHTML() {
+  return `<div style="text-align:center;padding:4rem;color:var(--text-dim)">
+    <div class="scan-dot" style="margin:0 auto 1rem"></div>
+    Loading photos...
+  </div>`;
 }
+
+function guestAllPhotosHTML(media) {
+  const photoGrid = media.length
+    ? media.map(m => `
+        <div class="media-item" onclick="openLightbox('${m.url}','${escapeHtml(m.file_name)}')">
+          <img src="${m.url}" alt="${escapeHtml(m.file_name)}" loading="lazy">
+          <div class="media-item-overlay"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></div>
+        </div>`).join('')
+    : `<div style="text-align:center;padding:3rem;color:var(--text-dim);grid-column:1/-1">No photos uploaded yet.</div>`;
+
+  return `
+    <div style="margin-bottom:2rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem">
+      <div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-dim);letter-spacing:0.08em">${media.length} PHOTO${media.length!==1?'S':''}</div>
+      <button class="btn btn-primary" onclick="showFindMyPhotos()" style="gap:0.5rem">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Find My Photos
+      </button>
+    </div>
+    <div class="media-grid" id="guest-photos-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+      ${photoGrid}
+    </div>`;
+}
+
+function showFindMyPhotos() {
+  const container = document.getElementById('guest-main-container');
+  if (!container) return;
+  container.innerHTML = `
+    <div style="max-width:480px;margin:0 auto;padding:2rem 0">
+      <button class="btn btn-ghost" onclick="initGuestView()" style="font-size:0.65rem;margin-bottom:1.5rem">
+        ← Back to all photos
+      </button>
+      <div style="font-family:var(--font-serif);font-size:1.6rem;font-weight:300;color:var(--c4);margin-bottom:0.4rem">Find My Photos</div>
+      <div style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text-dim);margin-bottom:2rem">Upload or take a clear photo of your face. We'll find every photo you appear in.</div>
+
+      <div class="tab-switcher" style="margin-bottom:1.5rem">
+        <button class="tab-btn active" id="tab-upload-face" onclick="switchScanMode('upload',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Upload Photo
+        </button>
+        <button class="tab-btn" id="tab-camera" onclick="switchScanMode('camera',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          Live Camera
+        </button>
+      </div>
+
+      <!-- UPLOAD MODE -->
+      <div id="mode-upload" style="display:flex;flex-direction:column;align-items:center;gap:1.2rem">
+        <div class="upload-zone" id="face-drop-zone" style="max-width:320px;width:100%">
+          <input type="file" id="face-file-input" accept="image/*" onchange="handleFaceFileSelect(event)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="width:36px;height:36px;color:var(--text-dim);margin-bottom:0.8rem"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          <div class="upload-zone-title">Upload a clear photo of your face</div>
+          <div class="upload-zone-sub">Any quality works — we'll enhance and detect</div>
+        </div>
+        <div id="face-preview-wrap" style="display:none;flex-direction:column;align-items:center;gap:1rem">
+          <div style="position:relative;display:inline-block">
+            <img id="face-preview" style="width:150px;height:150px;object-fit:cover;border-radius:50%;border:2px solid var(--accent);display:block">
+            <div id="face-detect-indicator" style="display:none;position:absolute;bottom:4px;right:4px;background:var(--accent);border-radius:50%;width:24px;height:24px;align-items:center;justify-content:center">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+          </div>
+          <div id="face-detect-status" class="scan-status"><div class="scan-dot"></div><span>Ready — click Find My Photos to search</span></div>
+          <button class="btn btn-primary" id="match-btn" onclick="runPhotoMatch()" style="padding:0.75rem 2.5rem;display:none">Find My Photos</button>
+          <button class="btn btn-ghost" style="font-size:0.65rem" onclick="resetFaceUpload()">Choose a different photo</button>
+        </div>
+      </div>
+
+      <!-- CAMERA MODE -->
+      <div id="mode-camera" style="display:none;flex-direction:column;align-items:center;gap:1rem">
+        <div class="camera-wrapper">
+          <video id="camera-feed" autoplay muted playsinline></video>
+          <canvas id="face-canvas"></canvas>
+          <div class="camera-corners">
+            <span class="corner tl"></span><span class="corner tr"></span>
+            <span class="corner bl"></span><span class="corner br"></span>
+          </div>
+        </div>
+        <div class="scan-status">
+          <div class="scan-dot"></div>
+          <span id="camera-status-text">Starting camera...</span>
+        </div>
+        <button class="btn btn-primary" id="capture-btn" onclick="captureAndMatch()" style="padding:0.75rem 2.5rem">
+          Capture and Find My Photos
+        </button>
+      </div>
+
+      <!-- SCANNING OVERLAY -->
+      <div id="guest-scanning" style="display:none;text-align:center;padding:2rem">
+        <div class="scan-dot" style="margin:0 auto 1rem;width:24px;height:24px"></div>
+        <div style="font-family:var(--font-mono);font-size:0.7rem;color:var(--accent)">Scanning with ArcFace AI...</div>
+      </div>
+    </div>`;
+
+  // Default to upload mode
+  state.scanMode = 'upload';
+}
+
+function resetGuestView() { initGuestView(); }
 
 async function startCamera() {
-  const video=document.getElementById('camera-feed'), statusEl=document.getElementById('camera-status-text'), captBtn=document.getElementById('capture-btn');
-  statusEl.textContent='Requesting camera...'; captBtn.disabled=true;
+  const video=document.getElementById('camera-feed');
+  if (!video) return;
+  const statusEl=document.getElementById('camera-status-text'), captBtn=document.getElementById('capture-btn');
+  if (statusEl) statusEl.textContent='Requesting camera...';
+  if (captBtn) captBtn.disabled=true;
   try {
     state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'user', width:{ideal:1280}, height:{ideal:720} } });
     video.srcObject = state.cameraStream;
     await video.play();
-    statusEl.textContent = 'Position your face in the frame — press Capture when ready';
-    captBtn.disabled = false;
+    if (statusEl) statusEl.textContent = 'Position your face — press Capture when ready';
+    if (captBtn) captBtn.disabled = false;
     startDetectLoop(video);
   } catch {
-    statusEl.textContent = 'Camera unavailable — use Upload Photo instead.';
-    captBtn.disabled=true; captBtn.style.opacity='0.4';
+    if (statusEl) statusEl.textContent = 'Camera unavailable — use Upload Photo instead.';
+    if (captBtn) { captBtn.disabled=true; captBtn.style.opacity='0.4'; }
   }
 }
 
@@ -480,8 +584,8 @@ function startDetectLoop(video) {
   const canvas=document.getElementById('face-canvas'), statusEl=document.getElementById('camera-status-text');
   clearInterval(state.detectLoop);
   state.detectLoop = setInterval(async () => {
-    if (video.readyState < 2) return;
-    try { await drawCameraOverlay(video, canvas); statusEl.textContent='Position your face — press Capture when ready'; } catch {}
+    if (!video || video.readyState < 2) return;
+    try { await drawCameraOverlay(video, canvas); } catch {}
   }, 400);
 }
 
@@ -496,8 +600,9 @@ function switchScanMode(mode, btn) {
   state.scanMode = mode;
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active')); btn?.classList.add('active');
   const camEl=document.getElementById('mode-camera'), upEl=document.getElementById('mode-upload');
+  if (!camEl || !upEl) return;
   if (mode==='camera') { camEl.style.display='flex'; upEl.style.display='none'; startCamera(); }
-  else { camEl.style.display='none'; upEl.style.display='flex'; stopCamera(); }
+  else { camEl.style.display='flex'; upEl.style.display='flex'; camEl.style.display='none'; stopCamera(); upEl.style.display='flex'; }
 }
 
 async function captureAndMatch() {
@@ -514,14 +619,16 @@ async function handleFaceFileSelect(e) {
   const reader=new FileReader();
   reader.onload = async ev => {
     const dataURL=ev.target.result;
-    document.getElementById('face-preview').src=dataURL;
-    document.getElementById('face-drop-zone').style.display='none';
-    document.getElementById('face-preview-wrap').style.display='flex';
-    document.getElementById('match-btn').style.display='none';
-    const statusEl=document.getElementById('face-detect-status');
-    statusEl.querySelector('span').textContent='Ready — click Find My Photos to search';
-    document.getElementById('face-detect-indicator').style.display='flex';
-    document.getElementById('match-btn').style.display='flex';
+    const preview = document.getElementById('face-preview');
+    const dropZone = document.getElementById('face-drop-zone');
+    const previewWrap = document.getElementById('face-preview-wrap');
+    const matchBtn = document.getElementById('match-btn');
+    const indicator = document.getElementById('face-detect-indicator');
+    if (preview) preview.src=dataURL;
+    if (dropZone) dropZone.style.display='none';
+    if (previewWrap) previewWrap.style.display='flex';
+    if (indicator) indicator.style.display='flex';
+    if (matchBtn) matchBtn.style.display='flex';
     window._pendingSelfieDataURL = dataURL;
   };
   reader.readAsDataURL(file);
@@ -539,82 +646,153 @@ async function runPhotoMatch() {
   await performFaceMatch(window._pendingSelfieDataURL);
 }
 
-// ─── CORE MATCHING ────────────────────────────────────────────────────────────
+// ─── CORE MATCHING — finds matched people folder ───────────────────────────────
 async function performFaceMatch(dataURL) {
-  setStep(2);
-  showScanning('Scanning with ArcFace AI…');
+  // Show scanning state
+  const scanningEl = document.getElementById('guest-scanning');
+  const modeUpload = document.getElementById('mode-upload');
+  const modeCamera = document.getElementById('mode-camera');
+  if (scanningEl) scanningEl.style.display='block';
+  if (modeUpload) modeUpload.style.display='none';
+  if (modeCamera) modeCamera.style.display='none';
 
-  if (!state.currentEventId) { hideScanning(); toast('No event selected.','error'); return; }
+  if (!state.currentEventId) { toast('No event selected.','error'); return; }
 
+  // Fetch gallery with embeddings
   const { data: allMedia } = await supabase.from('media')
     .select('*').eq('event_id', state.currentEventId).eq('file_type', 'image')
     .not('face_embeddings', 'is', null);
 
-  const gallery    = allMedia || [];
-  const indexed    = gallery.filter(m => { try { const p=typeof m.face_embeddings==='string'?JSON.parse(m.face_embeddings):m.face_embeddings; return Array.isArray(p)&&p.length>0; } catch { return false; } });
-  const unindexed  = gallery.length - indexed.length;
-
-  if (!gallery.length) {
-    hideScanning(); setStep(1);
-    toast('No photos found in this event.', 'error');
-    return;
-  }
+  const gallery = allMedia || [];
+  const indexed = gallery.filter(m => {
+    try { const p=typeof m.face_embeddings==='string'?JSON.parse(m.face_embeddings):m.face_embeddings; return Array.isArray(p)&&p.length>0; } catch { return false; }
+  });
 
   if (!indexed.length) {
-    hideScanning(); setStep(3);
-    renderResults(gallery.map(m=>({url:m.url,file_name:m.file_name,file_type:m.file_type,mime_type:m.mime_type,storage_path:m.storage_path,media_id:m.id,score:0,distance:0})), true, 0, unindexed);
+    if (scanningEl) scanningEl.style.display='none';
+    toast('Photos not yet indexed. Ask the event organizer to index faces.', 'error');
     return;
   }
 
+  // Match probe against gallery
   const result = await matchViaBackend(dataURL, indexed);
 
-  hideScanning();
-  setStep(3);
-  renderResults(result.matches || [], false, indexed.length, unindexed, result.probe_found);
-}
+  if (scanningEl) scanningEl.style.display='none';
 
-function renderResults(matches, isFallback, indexedCount, unindexedCount, probeFound=true) {
-  const container  = document.getElementById('results-container');
-  const grid       = document.getElementById('results-grid');
-  const countLabel = document.getElementById('results-count-label');
-
-  container.style.display = 'block';
-  document.getElementById('scan-panel').style.display = 'none';
-
-  let labelText = '';
-  if (!probeFound) labelText = 'No face detected in your photo — please try a clearer image';
-  else if (isFallback) labelText = 'Faces not yet indexed — showing all event photos';
-  else if (!matches.length) labelText = 'No matching photos found';
-  else {
-    labelText = `${matches.length} photo${matches.length!==1?'s':''} found with your face`;
-    if (unindexedCount>0) labelText += ` (${unindexedCount} still indexing)`;
-  }
-  countLabel.textContent = labelText;
-
-  if (!matches.length) {
-    grid.innerHTML = `<div class="no-results-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg><div class="empty-state-title">No matches found</div><div class="empty-state-sub">Try a clearer, well-lit photo facing the camera.</div></div>`;
+  if (!result.probe_found) {
+    toast('No face detected in your photo — try a clearer, well-lit image.', 'error');
+    if (modeUpload) modeUpload.style.display='flex';
     return;
   }
 
-  grid.innerHTML = matches.map(({ url, file_name, file_type, mime_type, score }, i) => `
-    <div class="result-card" style="animation-delay:${i*0.04}s">
-      <div class="result-thumb">
-        <img src="${url}" alt="${escapeHtml(file_name)}" loading="lazy">
-        ${score>0?`<div class="match-badge">${score}%</div>`:''}
-      </div>
-      <div class="result-body">
-        <div class="result-name">${escapeHtml(file_name)}</div>
-        <div class="result-actions">
-          <a class="btn btn-primary" href="${url}" download="${file_name}" target="_blank" style="text-decoration:none;justify-content:center;flex:1">Download</a>
-          <button class="btn btn-secondary" onclick="copyImageLink('${url}')" style="flex:1">Copy Link</button>
-        </div>
-      </div>
-    </div>`).join('');
+  const matches = result.matches || [];
+  if (!matches.length) {
+    renderGuestNoMatch();
+    return;
+  }
 
-  staggerIn(grid, '.result-card', 45);
-  container.scrollIntoView({ behavior:'smooth', block:'start' });
+  // Find which people folder contains any of the matched photos
+  const matchedIds = new Set(matches.map(m => m.media_id));
+
+  // Use already-computed clusters or compute now
+  let people = state.guestPeople;
+  if (!people.length) {
+    const clusterRes = await clusterViaBackend(indexed);
+    people = clusterRes.people || [];
+    state.guestPeople = people;
+  }
+
+  // Find the people folder that contains the most matched photos
+  let bestFolder = null, bestOverlap = 0;
+  for (const person of people) {
+    const overlap = (person.photo_ids || []).filter(id => matchedIds.has(id)).length;
+    if (overlap > bestOverlap) { bestOverlap = overlap; bestFolder = person; }
+  }
+
+  if (!bestFolder) {
+    // No cluster found — show matched photos directly
+    renderGuestResults(matches, null, allMedia);
+    return;
+  }
+
+  // Show the entire matched people folder
+  renderGuestResults(matches, bestFolder, allMedia);
+}
+
+function renderGuestNoMatch() {
+  const container = document.getElementById('guest-main-container');
+  if (!container) return;
+  container.innerHTML = `
+    <div style="text-align:center;padding:4rem 1rem">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="width:48px;height:48px;color:var(--text-dim);margin-bottom:1rem"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      <div style="font-family:var(--font-serif);font-size:1.4rem;font-weight:300;color:var(--c4);margin-bottom:0.5rem">No matches found</div>
+      <div style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text-dim);margin-bottom:2rem">Try a clearer, well-lit photo facing the camera.</div>
+      <button class="btn btn-outline" onclick="showFindMyPhotos()">Try Again</button>
+      <button class="btn btn-ghost" onclick="initGuestView()" style="margin-left:0.5rem">See All Photos</button>
+    </div>`;
+}
+
+function renderGuestResults(matches, folder, allMedia) {
+  const container = document.getElementById('guest-main-container');
+  if (!container) return;
+
+  const photoMap = {};
+  for (const m of allMedia) photoMap[m.id] = m;
+
+  // The photos to show = entire people folder (all photos of this person)
+  const folderPhotos = folder
+    ? (folder.photo_ids || []).map(id => photoMap[id]).filter(Boolean)
+    : matches.map(m => allMedia.find(med => med.id === m.media_id)).filter(Boolean);
+
+  const matchedIds = new Set(matches.map(m => m.media_id));
+  const folderLabel = folder ? `Your Photos — ${folder.photo_count} photo${folder.photo_count!==1?'s':''}` : `${matches.length} Matching Photo${matches.length!==1?'s':''}`;
+
+  container.innerHTML = `
+    <div style="margin-bottom:1.5rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem">
+      <div>
+        <div style="font-family:var(--font-serif);font-size:1.5rem;font-weight:300;color:var(--c4)">${folderLabel}</div>
+        <div style="font-family:var(--font-mono);font-size:0.6rem;color:var(--text-dim);margin-top:0.2rem">Photos you appear in from this event</div>
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="downloadAllMatchedPhotos()" style="gap:0.4rem;font-size:0.7rem">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Save All
+        </button>
+        <button class="btn btn-ghost" onclick="showFindMyPhotos()" style="font-size:0.7rem">Search Again</button>
+        <button class="btn btn-ghost" onclick="initGuestView()" style="font-size:0.7rem">All Photos</button>
+      </div>
+    </div>
+    <div class="media-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px">
+      ${folderPhotos.map(m => `
+        <div class="guest-result-card" style="position:relative;border-radius:8px;overflow:hidden;aspect-ratio:1;background:var(--c1)">
+          <img src="${m.url}" alt="${escapeHtml(m.file_name)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;cursor:pointer" onclick="openLightbox('${m.url}','${escapeHtml(m.file_name)}')">
+          ${matchedIds.has(m.id)?'<div style="position:absolute;top:6px;left:6px;background:var(--accent);border-radius:4px;padding:2px 6px;font-family:var(--font-mono);font-size:0.5rem;color:var(--c1)">MATCH</div>':''}
+          <div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.7));padding:0.5rem;display:flex;justify-content:flex-end">
+            <a href="${m.url}" download="${m.file_name}" target="_blank" title="Save photo" style="color:white;display:flex;align-items:center">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </a>
+          </div>
+        </div>`).join('')}
+    </div>`;
+
+  // Store for bulk download
+  window._guestFolderPhotos = folderPhotos;
+}
+
+async function downloadAllMatchedPhotos() {
+  const photos = window._guestFolderPhotos || [];
+  if (!photos.length) return;
+  toast(`Saving ${photos.length} photos...`, 'info');
+  for (const photo of photos) {
+    // Open each in new tab as download fallback (direct download blocked cross-origin)
+    const a = document.createElement('a');
+    a.href = photo.url;
+    a.download = photo.file_name;
+    a.target = '_blank';
+    a.click();
+    await new Promise(r => setTimeout(r, 400)); // small delay between downloads
+  }
 }
 
 window.copyImageLink = url => navigator.clipboard.writeText(url).then(()=>toast('Link copied.','success'));
 function escapeHtml(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-// style patch appended — add to style.css manually
