@@ -557,14 +557,42 @@ function closePerson() { switchDetailTab('people'); }
 async function reindexCurrentEvent() {
   if (!state.currentEventId) return;
   state.currentPeople = [];
+  state.mergeLog = [];
+
+  // 1. Re-index all photos (clears stale embeddings, re-runs face detection)
   await reindexEvent(state.currentEventId);
+
+  // 2. Refresh media grid — critical: must await this so state.currentMedia
+  //    has fresh embeddings before we cluster. Without this await the cluster
+  //    call sees the OLD (pre-reindex) embeddings from state.currentMedia.
   await refreshMediaGrid(state.currentEventId);
-  // Re-run clustering so People tab reflects fresh embeddings immediately
+
+  // 3. Filter to only photos that now have fresh embeddings
   const indexed = (state.currentMedia || []).filter(hasIndexedFaces);
-  if (indexed.length) {
-    const clusterRes = await clusterViaBackend(indexed, { epsilon: 0.68 });
-    state.currentPeople = clusterRes.people || [];
-    toast(`People updated — ${state.currentPeople.length} person${state.currentPeople.length !== 1 ? 's' : ''} found.`, 'success');
+  if (!indexed.length) {
+    toast('No faces detected in any photo. Try different photos or check your backend.', 'warning');
+    return;
+  }
+
+  // 4. Cluster with generous epsilon — works for real-world event photos
+  const clusterRes = await clusterViaBackend(indexed, { epsilon: 0.65 });
+  state.currentPeople = clusterRes.people || [];
+
+  // 5. Re-apply any saved merges on top of fresh clusters
+  if (state.currentPeople.length) {
+    const savedMerges = await loadSavedMerges(state.currentEventId);
+    if (savedMerges && savedMerges.length) {
+      state.mergeLog = savedMerges;
+      state.currentPeople = applySavedMerges(state.currentPeople, savedMerges);
+    }
+  }
+
+  toast(`Done — ${state.currentPeople.length} person${state.currentPeople.length !== 1 ? 's' : ''} found across ${indexed.length} photos.`, 'success');
+
+  // 6. If we're on the people tab, refresh the grid
+  if (document.getElementById('detail-panel-people')?.style.display !== 'none') {
+    renderPeopleGrid(state.currentPeople);
+    document.getElementById('detail-people-count').textContent = `(${state.currentPeople.length})`;
   }
 }
 
