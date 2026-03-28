@@ -324,6 +324,13 @@ async function reindexCurrentEvent() {
   state.currentPeople = [];
   await reindexEvent(state.currentEventId);
   await refreshMediaGrid(state.currentEventId);
+  // Re-run clustering so People tab reflects fresh embeddings immediately
+  const indexed = (state.currentMedia || []).filter(hasIndexedFaces);
+  if (indexed.length) {
+    const clusterRes = await clusterViaBackend(indexed);
+    state.currentPeople = clusterRes.people || [];
+    toast(`People updated — ${state.currentPeople.length} person${state.currentPeople.length !== 1 ? 's' : ''} found.`, 'success');
+  }
 }
 
 function showSection(name, sidebarEl) {
