@@ -650,6 +650,17 @@ nav {
   transition: border-color 0.18s;
 }
 .person-card:hover .person-face-ring { border-color: var(--accent); }
+.person-card-selected {
+  border-color: var(--accent) !important;
+  background: rgba(168,144,128,0.10) !important;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.person-card-selected .person-thumb { border-color: var(--accent); }
+#merge-mode-btn.active {
+  background: var(--accent);
+  color: var(--c1);
+  border-color: var(--accent);
+}
 
 .person-label {
   font-size: 0.72rem;
