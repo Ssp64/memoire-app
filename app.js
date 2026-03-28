@@ -1,4 +1,4 @@
-// app.js v2.0 — Main application controller (backend-powered face intelligence)
+// app.js v2.1 — Main application controller (UI glitch fixes)
 import { supabase }                    from './supabase.js';
 import { authState, initAuth, doLogin as authLogin, doRegister as authRegister, doLogout as authLogout, getUserName, getUserInitials } from './auth.js';
 import { createEvent, loadEvents, loadEvent, deleteEvent, loadMedia, uploadFiles, reindexEvent } from './events.js';
@@ -20,23 +20,49 @@ Object.assign(window, {
   switchScanMode, captureAndMatch, handleFaceFileSelect, runPhotoMatch,
   resetFaceUpload, resetGuestView, closeLightbox, openEventDetail,
   openLightbox, reindexCurrentEvent, switchDetailTab, closePerson, openPerson,
+  removeMediaItem,
 });
 
 async function boot() {
   document.body.style.opacity = '0';
-  loadModels().catch(() => {}); // No-op in v2, kept for safety
+  loadModels().catch(() => {});
+
+  // FIX: Check if this is a guest share link BEFORE auth init
+  const params = new URLSearchParams(location.search);
+  const eventParam = params.get('event');
+
   const user = await initAuth(onAuthStateChanged);
   document.body.style.transition = 'opacity 0.3s ease';
   document.body.style.opacity    = '1';
-  const params = new URLSearchParams(location.search);
-  if (params.get('event')) { state.currentEventId = params.get('event'); navigate('guest'); return; }
+
+  // FIX: If share link, go straight to guest view — no login prompt
+  if (eventParam) {
+    state.currentEventId = eventParam;
+    navigate('guest');
+    return;
+  }
+
   if (user) navigate('dashboard'); else navigate('landing');
 }
 
 function onAuthStateChanged(event, user, prevUser) {
-  if (event === 'SIGNED_IN' && !prevUser) navigate('dashboard');
-  else if (event === 'SIGNED_OUT') navigate('landing');
+  // FIX: Don't redirect to landing if on guest view (share link)
+  if (event === 'SIGNED_IN' && !prevUser) {
+    const params = new URLSearchParams(location.search);
+    if (!params.get('event')) navigate('dashboard');
+  } else if (event === 'SIGNED_OUT') {
+    const params = new URLSearchParams(location.search);
+    // FIX: Don't log out of guest view on token expiry
+    if (!params.get('event')) navigate('landing');
+  }
 }
+
+// FIX: Prevent auto-logout by refreshing session proactively every 10 minutes
+setInterval(async () => {
+  if (authState.user) {
+    await supabase.auth.refreshSession();
+  }
+}, 10 * 60 * 1000);
 
 boot();
 
@@ -150,7 +176,7 @@ function renderEventCards(events) {
         </div>
         <div class="event-card-actions">
           <button class="btn btn-secondary" onclick="event.stopPropagation();openEventDetail('${ev.id}')">Manage</button>
-          <button class="btn btn-outline" onclick="event.stopPropagation();copyEventLink('${ev.id}')">Copy Link</button>
+          <button class="btn btn-outline" onclick="event.stopPropagation();copyEventLink('${ev.id}')">Share Link</button>
         </div>
       </div>
     </div>`;
@@ -171,6 +197,13 @@ async function openEventDetail(id) {
     <span class="chip chip-green"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Active</span>
     <span class="chip chip-amber">${ev.photo_count??0} photos</span>
     ${ev.date?`<span class="chip chip-purple">${ev.date}</span>`:''}`;
+  await refreshMediaGrid(id);
+  switchDetailTab('photos');
+  showSection('detail', null);
+}
+
+// FIX: Extracted media refresh so it can be called without re-opening the whole detail
+async function refreshMediaGrid(id) {
   const media = await loadMedia(id);
   state.currentMedia = media;
   document.getElementById('detail-photo-count').textContent = `(${media.length})`;
@@ -180,16 +213,32 @@ async function openEventDetail(id) {
   else {
     empty.style.display='none'; grid.style.display='grid';
     grid.innerHTML = media.map(m=>`
-      <div class="media-item" onclick="openLightbox('${m.url}','${escapeHtml(m.file_name)}')">
-        <img src="${m.url}" alt="${escapeHtml(m.file_name)}" loading="lazy">
+      <div class="media-item" data-id="${m.id}">
+        <img src="${m.url}" alt="${escapeHtml(m.file_name)}" loading="lazy" onclick="openLightbox('${m.url}','${escapeHtml(m.file_name)}')">
         ${m.file_type==='video'?'<div class="video-tag">VIDEO</div>':''}
         ${!m.face_embeddings||m.face_embeddings==='[]'?'<div class="no-face-tag" title="No face detected"></div>':''}
-        <div class="media-item-overlay"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></div>
+        <button class="media-delete-btn" onclick="removeMediaItem('${m.id}','${m.storage_path}')" title="Remove photo">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <div class="media-item-overlay" onclick="openLightbox('${m.url}','${escapeHtml(m.file_name)}')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></div>
       </div>`).join('');
     staggerIn(grid, '.media-item', 25);
   }
-  switchDetailTab('photos');
-  showSection('detail', null);
+}
+
+// FIX: Delete individual photo
+async function removeMediaItem(mediaId, storagePath) {
+  if (!confirm('Remove this photo? This cannot be undone.')) return;
+  if (storagePath) await supabase.storage.from('event-media').remove([storagePath]);
+  await supabase.from('media').delete().eq('id', mediaId);
+  // Remove from local state
+  state.currentMedia = state.currentMedia.filter(m => m.id !== mediaId);
+  // Remove from DOM without full reload
+  const el = document.querySelector(`.media-item[data-id="${mediaId}"]`);
+  if (el) { el.style.opacity='0'; el.style.transform='scale(0.8)'; setTimeout(()=>el.remove(), 200); }
+  toast('Photo removed.', 'success');
+  // Update count
+  document.getElementById('detail-photo-count').textContent = `(${state.currentMedia.length})`;
 }
 
 // ─── PEOPLE TAB ───────────────────────────────────────────────────────────────
@@ -220,7 +269,6 @@ async function loadPeoplePanel() {
   gridEl.style.display    = 'none';
   emptyEl.style.display   = 'none';
 
-  // Call backend DBSCAN clustering
   const clusterRes = await clusterViaBackend(indexed);
   const people = clusterRes.people || [];
   state.currentPeople = people;
@@ -284,7 +332,8 @@ async function reindexCurrentEvent() {
   if (!state.currentEventId) return;
   state.currentPeople = [];
   await reindexEvent(state.currentEventId);
-  openEventDetail(state.currentEventId);
+  // FIX: Refresh media grid in place — don't navigate away
+  await refreshMediaGrid(state.currentEventId);
 }
 
 function showSection(name, sidebarEl) {
@@ -378,13 +427,17 @@ async function handleUploadFiles() {
   if (!eventId) { toast('Please select an event first.', 'error'); return; }
   if (!state.selectedFiles.length) { toast('No files selected.', 'error'); return; }
   const ok = await uploadFiles(eventId, state.selectedFiles);
-  if (ok) { state.selectedFiles=[]; renderUploadPreview(); }
+  if (ok) {
+    state.selectedFiles=[]; renderUploadPreview();
+    // FIX: After upload, stay on upload section — don't navigate away
+    toast('Upload complete! Go to your event to view photos.', 'success');
+  }
 }
 
 // ─── GUEST VIEW ───────────────────────────────────────────────────────────────
 async function initGuestView() {
   resetGuestView();
-  const id = state.currentEventId || new URLSearchParams(location.search).get('event') || state.events[0]?.id;
+  const id = state.currentEventId || new URLSearchParams(location.search).get('event');
   state.currentEventId = id;
   if (id) {
     const ev = state.events.find(e=>e.id===id) || await loadEvent(id);
@@ -393,10 +446,11 @@ async function initGuestView() {
       document.getElementById('guest-event-meta').textContent = [ev.date,ev.location].filter(Boolean).join(' — ');
     }
   } else {
-    document.getElementById('guest-event-name').textContent = 'Demo Event';
-    document.getElementById('guest-event-meta').textContent = 'Connect an event to search photos';
+    document.getElementById('guest-event-name').textContent = 'Event';
+    document.getElementById('guest-event-meta').textContent = '';
   }
-  switchScanMode('camera', document.getElementById('tab-camera'));
+  // FIX: Default to upload tab on guest view (more reliable than camera)
+  switchScanMode('upload', document.getElementById('tab-upload'));
 }
 
 function resetGuestView() {
@@ -468,7 +522,6 @@ async function handleFaceFileSelect(e) {
     statusEl.querySelector('span').textContent='Ready — click Find My Photos to search';
     document.getElementById('face-detect-indicator').style.display='flex';
     document.getElementById('match-btn').style.display='flex';
-    // Store the dataURL for later matching
     window._pendingSelfieDataURL = dataURL;
   };
   reader.readAsDataURL(file);
@@ -486,14 +539,13 @@ async function runPhotoMatch() {
   await performFaceMatch(window._pendingSelfieDataURL);
 }
 
-// ─── CORE MATCHING — uses backend ArcFace ─────────────────────────────────────
+// ─── CORE MATCHING ────────────────────────────────────────────────────────────
 async function performFaceMatch(dataURL) {
   setStep(2);
   showScanning('Scanning with ArcFace AI…');
 
   if (!state.currentEventId) { hideScanning(); toast('No event selected.','error'); return; }
 
-  // Fetch full gallery with embeddings from Supabase
   const { data: allMedia } = await supabase.from('media')
     .select('*').eq('event_id', state.currentEventId).eq('file_type', 'image')
     .not('face_embeddings', 'is', null);
@@ -509,13 +561,11 @@ async function performFaceMatch(dataURL) {
   }
 
   if (!indexed.length) {
-    // Nothing indexed yet — show all as fallback
     hideScanning(); setStep(3);
     renderResults(gallery.map(m=>({url:m.url,file_name:m.file_name,file_type:m.file_type,mime_type:m.mime_type,storage_path:m.storage_path,media_id:m.id,score:0,distance:0})), true, 0, unindexed);
     return;
   }
 
-  // Call backend for matching
   const result = await matchViaBackend(dataURL, indexed);
 
   hideScanning();
@@ -567,3 +617,4 @@ function renderResults(matches, isFallback, indexedCount, unindexedCount, probeF
 
 window.copyImageLink = url => navigator.clipboard.writeText(url).then(()=>toast('Link copied.','success'));
 function escapeHtml(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// style patch appended — add to style.css manually
