@@ -386,7 +386,7 @@ async function loadPeoplePanel() {
   });
   if (!indexed.length) { loadingEl.style.display='none'; gridEl.style.display='none'; emptyEl.style.display='block'; return; }
   loadingEl.style.display = 'block'; gridEl.style.display = 'none'; emptyEl.style.display = 'none';
-  const clusterRes = await clusterViaBackend(indexed);
+  const clusterRes = await clusterViaBackend(indexed, { epsilon: 0.68 });
   let people = clusterRes.people || [];
 
   // Re-apply any previously saved merges so refresh never splits folders.
@@ -562,7 +562,7 @@ async function reindexCurrentEvent() {
   // Re-run clustering so People tab reflects fresh embeddings immediately
   const indexed = (state.currentMedia || []).filter(hasIndexedFaces);
   if (indexed.length) {
-    const clusterRes = await clusterViaBackend(indexed);
+    const clusterRes = await clusterViaBackend(indexed, { epsilon: 0.68 });
     state.currentPeople = clusterRes.people || [];
     toast(`People updated — ${state.currentPeople.length} person${state.currentPeople.length !== 1 ? 's' : ''} found.`, 'success');
   }
