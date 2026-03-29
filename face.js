@@ -510,27 +510,16 @@ async function loadPeoplePanel() {
   }
 }
 
-// Cosine similarity between two embedding arrays.
-function cosineSim(a, b) {
-  if (!a || !b || a.length !== b.length) return 0;
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot   += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom > 0 ? dot / denom : 0;
-}
-
 // Compute face-zoom CSS for a person-thumb image.
 // Given a face bbox [x1,y1,x2,y2] in the stored image's pixel space,
 // we use object-position to shift the img so the face center is centered
 // inside the circular thumb, and scale it up so the face fills the circle.
 //
-// person   — the cluster object so we can find the right face when the
-//            representative photo contains multiple people.
-// repPhoto — the media item used as the thumbnail.
+// person (optional) — pass the cluster object so we can pick the right face
+// when the representative photo contains multiple people. When provided and
+// the photo has multiple faces, we find the face whose embedding is most
+// similar to the centroid of the person's OTHER photos.  Falls back to the
+// highest-det_score face if we can't build a reference.
 function faceZoomStyle(repPhoto, person) {
   if (!repPhoto) return null;
 
@@ -541,90 +530,82 @@ function faceZoomStyle(repPhoto, person) {
   }
   if (!Array.isArray(meta) || !meta.length) return null;
 
-  // If only one face in the photo there is nothing to disambiguate.
-  if (meta.length === 1) {
-    const bbox = meta[0].bbox;
-    if (!Array.isArray(bbox) || bbox.length < 4) return null;
-    const [x1, y1, x2, y2] = bbox;
-    if ((x2 - x1) <= 0 || (y2 - y1) <= 0) return null;
-    return { bbox: [x1, y1, x2, y2] };
-  }
+  // ── Pick which face in the photo belongs to this person ──────────────────
+  let chosenIdx = -1;
 
-  // Multiple faces in the thumbnail — we need to pick the one that belongs
-  // to *this* person's cluster.
-  //
-  // Strategy: build a reference embedding for the person by averaging the
-  // face embeddings from the OTHER photos in their cluster (photos that are
-  // NOT the representative photo, so there's no ambiguity about which face
-  // to pick there). Then pick the face in the rep photo whose embedding is
-  // most similar to that reference.
-  //
-  // If we can't build a reference (e.g. the person has only one photo),
-  // fall back to the highest-det_score face — same as the old behaviour.
+  // Only attempt embedding-based selection when there are multiple faces AND
+  // we were given a person object to build a reference from.
+  if (meta.length > 1 && person) {
+    try {
+      // Parse face_embeddings on the rep photo (one embedding per face, same
+      // order as face_metadata).
+      let repEmbs = repPhoto.face_embeddings;
+      if (typeof repEmbs === 'string') repEmbs = JSON.parse(repEmbs);
+      // Normalise flat single-embedding → array-of-arrays
+      if (Array.isArray(repEmbs) && repEmbs.length && typeof repEmbs[0] === 'number') {
+        repEmbs = [repEmbs];
+      }
 
-  let bestFaceIdx = -1;
+      if (Array.isArray(repEmbs) && repEmbs.length >= meta.length) {
+        // Build a reference centroid from the OTHER photos in this cluster.
+        const photoMap = {};
+        for (const m of state.currentMedia) photoMap[m.id] = m;
 
-  if (person) {
-    // Parse face_embeddings from the representative photo (parallel to face_metadata)
-    let repEmbeddings = repPhoto.face_embeddings;
-    if (typeof repEmbeddings === 'string') {
-      try { repEmbeddings = JSON.parse(repEmbeddings); } catch { repEmbeddings = null; }
-    }
-    // Normalise: may be a flat single embedding (array of numbers) or array of arrays
-    if (Array.isArray(repEmbeddings) && repEmbeddings.length && typeof repEmbeddings[0] === 'number') {
-      repEmbeddings = [repEmbeddings];
-    }
+        const refs = [];
+        for (const pid of (person.photo_ids || [])) {
+          if (pid === repPhoto.id) continue;       // skip the shared photo itself
+          const m = photoMap[pid];
+          if (!m) continue;
+          let embs = m.face_embeddings;
+          if (typeof embs === 'string') embs = JSON.parse(embs);
+          if (Array.isArray(embs) && embs.length) {
+            if (typeof embs[0] === 'number') embs = [embs];
+            for (const e of embs) {
+              if (Array.isArray(e) && e.length >= 128) refs.push(e);
+            }
+          }
+        }
 
-    // Collect embeddings from the OTHER photos that belong to this cluster.
-    const photoMap = {};
-    for (const m of state.currentMedia) photoMap[m.id] = m;
+        if (refs.length) {
+          // Average into centroid
+          const dim      = refs[0].length;
+          const centroid = new Array(dim).fill(0);
+          for (const e of refs) for (let d = 0; d < dim; d++) centroid[d] += e[d];
+          for (let d = 0; d < dim; d++) centroid[d] /= refs.length;
 
-    const otherEmbeddings = [];
-    for (const pid of (person.photo_ids || [])) {
-      if (pid === repPhoto.id) continue;
-      const m = photoMap[pid];
-      if (!m) continue;
-      let embs = m.face_embeddings;
-      if (typeof embs === 'string') { try { embs = JSON.parse(embs); } catch { continue; } }
-      if (Array.isArray(embs) && embs.length) {
-        if (typeof embs[0] === 'number') embs = [embs]; // flat single embedding
-        for (const e of embs) {
-          if (Array.isArray(e) && e.length >= 128) otherEmbeddings.push(e);
+          // Cosine similarity — pick the most similar face in the rep photo
+          let bestSim = -Infinity;
+          for (let i = 0; i < meta.length; i++) {
+            const emb = repEmbs[i];
+            if (!Array.isArray(emb) || emb.length < 128) continue;
+            let dot = 0, nA = 0, nB = 0;
+            for (let d = 0; d < dim; d++) {
+              dot += emb[d] * centroid[d];
+              nA  += emb[d] * emb[d];
+              nB  += centroid[d] * centroid[d];
+            }
+            const sim = (nA && nB) ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
+            if (sim > bestSim) { bestSim = sim; chosenIdx = i; }
+          }
         }
       }
-    }
-
-    if (otherEmbeddings.length > 0 && Array.isArray(repEmbeddings) && repEmbeddings.length >= meta.length) {
-      // Average the reference embeddings into a centroid.
-      const dim = otherEmbeddings[0].length;
-      const centroid = new Array(dim).fill(0);
-      for (const e of otherEmbeddings) {
-        for (let d = 0; d < dim; d++) centroid[d] += e[d];
-      }
-      for (let d = 0; d < dim; d++) centroid[d] /= otherEmbeddings.length;
-
-      // Find the face in the rep photo most similar to the centroid.
-      let bestSim = -Infinity;
-      for (let i = 0; i < meta.length; i++) {
-        const emb = repEmbeddings[i];
-        if (!Array.isArray(emb) || emb.length < 128) continue;
-        const sim = cosineSim(emb, centroid);
-        if (sim > bestSim) { bestSim = sim; bestFaceIdx = i; }
-      }
+    } catch (_) {
+      // Any parse error → fall through to det_score fallback below
     }
   }
 
-  // Fallback: use the face with the highest detection confidence.
-  if (bestFaceIdx === -1) {
-    bestFaceIdx = meta.reduce(
-      (bestI, f, i) => (f.det_score > meta[bestI].det_score ? i : bestI), 0
+  // Fallback: highest detection confidence (original behaviour)
+  if (chosenIdx === -1) {
+    chosenIdx = meta.reduce(
+      (best, f, i) => (f.det_score > meta[best].det_score ? i : best), 0
     );
   }
 
-  const bbox = meta[bestFaceIdx].bbox; // [x1, y1, x2, y2]
+  const bbox = meta[chosenIdx].bbox; // [x1, y1, x2, y2]
   if (!Array.isArray(bbox) || bbox.length < 4) return null;
+
   const [x1, y1, x2, y2] = bbox;
-  if ((x2 - x1) <= 0 || (y2 - y1) <= 0) return null;
+  if (x2 - x1 <= 0 || y2 - y1 <= 0) return null;
 
   return { bbox: [x1, y1, x2, y2] };
 }
