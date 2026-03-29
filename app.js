@@ -514,7 +514,13 @@ async function loadPeoplePanel() {
 // Given a face bbox [x1,y1,x2,y2] in the stored image's pixel space,
 // we use object-position to shift the img so the face center is centered
 // inside the circular thumb, and scale it up so the face fills the circle.
-function faceZoomStyle(repPhoto) {
+//
+// person (optional) — pass the cluster object so we can pick the right face
+// when the representative photo contains multiple people. When provided and
+// the photo has multiple faces, we find the face whose embedding is most
+// similar to the centroid of the person's OTHER photos.  Falls back to the
+// highest-det_score face if we can't build a reference.
+function faceZoomStyle(repPhoto, person) {
   if (!repPhoto) return null;
 
   // Parse face_metadata — it may be a JSON string or already an array
@@ -524,23 +530,82 @@ function faceZoomStyle(repPhoto) {
   }
   if (!Array.isArray(meta) || !meta.length) return null;
 
-  // Use the highest-confidence face detection as the representative
-  const best = meta.reduce((a, b) => (b.det_score > a.det_score ? b : a), meta[0]);
-  const bbox = best.bbox; // [x1, y1, x2, y2]
+  // ── Pick which face in the photo belongs to this person ──────────────────
+  let chosenIdx = -1;
+
+  // Only attempt embedding-based selection when there are multiple faces AND
+  // we were given a person object to build a reference from.
+  if (meta.length > 1 && person) {
+    try {
+      // Parse face_embeddings on the rep photo (one embedding per face, same
+      // order as face_metadata).
+      let repEmbs = repPhoto.face_embeddings;
+      if (typeof repEmbs === 'string') repEmbs = JSON.parse(repEmbs);
+      // Normalise flat single-embedding → array-of-arrays
+      if (Array.isArray(repEmbs) && repEmbs.length && typeof repEmbs[0] === 'number') {
+        repEmbs = [repEmbs];
+      }
+
+      if (Array.isArray(repEmbs) && repEmbs.length >= meta.length) {
+        // Build a reference centroid from the OTHER photos in this cluster.
+        const photoMap = {};
+        for (const m of state.currentMedia) photoMap[m.id] = m;
+
+        const refs = [];
+        for (const pid of (person.photo_ids || [])) {
+          if (pid === repPhoto.id) continue;       // skip the shared photo itself
+          const m = photoMap[pid];
+          if (!m) continue;
+          let embs = m.face_embeddings;
+          if (typeof embs === 'string') embs = JSON.parse(embs);
+          if (Array.isArray(embs) && embs.length) {
+            if (typeof embs[0] === 'number') embs = [embs];
+            for (const e of embs) {
+              if (Array.isArray(e) && e.length >= 128) refs.push(e);
+            }
+          }
+        }
+
+        if (refs.length) {
+          // Average into centroid
+          const dim      = refs[0].length;
+          const centroid = new Array(dim).fill(0);
+          for (const e of refs) for (let d = 0; d < dim; d++) centroid[d] += e[d];
+          for (let d = 0; d < dim; d++) centroid[d] /= refs.length;
+
+          // Cosine similarity — pick the most similar face in the rep photo
+          let bestSim = -Infinity;
+          for (let i = 0; i < meta.length; i++) {
+            const emb = repEmbs[i];
+            if (!Array.isArray(emb) || emb.length < 128) continue;
+            let dot = 0, nA = 0, nB = 0;
+            for (let d = 0; d < dim; d++) {
+              dot += emb[d] * centroid[d];
+              nA  += emb[d] * emb[d];
+              nB  += centroid[d] * centroid[d];
+            }
+            const sim = (nA && nB) ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
+            if (sim > bestSim) { bestSim = sim; chosenIdx = i; }
+          }
+        }
+      }
+    } catch (_) {
+      // Any parse error → fall through to det_score fallback below
+    }
+  }
+
+  // Fallback: highest detection confidence (original behaviour)
+  if (chosenIdx === -1) {
+    chosenIdx = meta.reduce(
+      (best, f, i) => (f.det_score > meta[best].det_score ? i : best), 0
+    );
+  }
+
+  const bbox = meta[chosenIdx].bbox; // [x1, y1, x2, y2]
   if (!Array.isArray(bbox) || bbox.length < 4) return null;
 
   const [x1, y1, x2, y2] = bbox;
-  const faceW = x2 - x1;
-  const faceH = y2 - y1;
-  if (faceW <= 0 || faceH <= 0) return null;
-
-  // Face center as a fraction of image dimensions.
-  // We don't know the exact stored pixel dims but Supabase serves the original;
-  // we work in relative units — object-position accepts % which is relative
-  // to (image_size - container_size), so we use the bbox center ratio.
-  // We need actual image dimensions to convert bbox pixels → %. Load them
-  // lazily via a natural image width/height after the img loads.
-  // For the initial render we compute the position string and let onload refine it.
+  if (x2 - x1 <= 0 || y2 - y1 <= 0) return null;
 
   return { bbox: [x1, y1, x2, y2] };
 }
@@ -635,7 +700,7 @@ function renderPeopleGrid(people) {
   gridEl.innerHTML = people.map((p, i) => {
     const repPhoto   = photoMap[p.representative_photo_id] || photoMap[p.photo_ids?.[0]];
     const thumbUrl   = repPhoto?.url || p.representative_url || '';
-    const zoomData   = repPhoto ? faceZoomStyle(repPhoto) : null;
+    const zoomData   = repPhoto ? faceZoomStyle(repPhoto, p) : null;
     const isSelected = state.mergeSelected.includes(i);
     const clickFn    = state.mergeMode
       ? `selectPersonForMerge(${i})`
@@ -757,13 +822,19 @@ function openPerson(personIndex) {
     `${person.photo_count} photo${person.photo_count !== 1 ? 's' : ''} · ${person.face_count} face detection${person.face_count !== 1 ? 's' : ''}`;
 
   const avatarEl = document.getElementById('person-detail-avatar');
-  const rep = photos[0];
-  avatarEl.innerHTML = rep
-    ? `<img src="${rep.url}" alt="Person"
-        style="width:100%;height:100%;object-fit:cover;border-radius:50%">`
-    : `<div style="display:flex;align-items:center;justify-content:center;
+  const rep = photoMap[person.representative_photo_id] || photos[0];
+  if (rep) {
+    const zoomData = faceZoomStyle(rep, person);
+    const bboxAttr = zoomData ? `data-bbox="${zoomData.bbox.join('_')}"` : '';
+    avatarEl.innerHTML = `<img src="${rep.url}" alt="Person"
+        style="width:100%;height:100%;object-fit:cover;border-radius:50%"
+        ${bboxAttr}
+        onload="this.dataset.bbox && applyFaceZoom(this, this.dataset.bbox.split('_').map(Number))">`;
+  } else {
+    avatarEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;
         height:100%;font-family:var(--font-mono);font-size:1.2rem;
         color:var(--accent)">P${person.person_index + 1}</div>`;
+  }
 
   const grid = document.getElementById('person-media-grid');
   grid.innerHTML = photos.map(m => `
