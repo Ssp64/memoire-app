@@ -55,6 +55,7 @@ Object.assign(window, {
   openLightbox, reindexCurrentEvent, switchDetailTab, closePerson, openPerson,
   removeMediaItem, showFindMyPhotos, downloadAllMatchedPhotos,
   toggleMergeMode, selectPersonForMerge, executeMerge, cancelMerge,
+  applyFaceZoom,
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -509,6 +510,95 @@ async function loadPeoplePanel() {
   }
 }
 
+// Compute face-zoom CSS for a person-thumb image.
+// Given a face bbox [x1,y1,x2,y2] in the stored image's pixel space,
+// we use object-position to shift the img so the face center is centered
+// inside the circular thumb, and scale it up so the face fills the circle.
+function faceZoomStyle(repPhoto) {
+  if (!repPhoto) return null;
+
+  // Parse face_metadata — it may be a JSON string or already an array
+  let meta = repPhoto.face_metadata;
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta); } catch { return null; }
+  }
+  if (!Array.isArray(meta) || !meta.length) return null;
+
+  // Use the highest-confidence face detection as the representative
+  const best = meta.reduce((a, b) => (b.det_score > a.det_score ? b : a), meta[0]);
+  const bbox = best.bbox; // [x1, y1, x2, y2]
+  if (!Array.isArray(bbox) || bbox.length < 4) return null;
+
+  const [x1, y1, x2, y2] = bbox;
+  const faceW = x2 - x1;
+  const faceH = y2 - y1;
+  if (faceW <= 0 || faceH <= 0) return null;
+
+  // Face center as a fraction of image dimensions.
+  // We don't know the exact stored pixel dims but Supabase serves the original;
+  // we work in relative units — object-position accepts % which is relative
+  // to (image_size - container_size), so we use the bbox center ratio.
+  // We need actual image dimensions to convert bbox pixels → %. Load them
+  // lazily via a natural image width/height after the img loads.
+  // For the initial render we compute the position string and let onload refine it.
+
+  return { bbox: [x1, y1, x2, y2] };
+}
+
+// After an img loads, apply face-zoom based on its natural dimensions + bbox.
+function applyFaceZoom(img, bbox) {
+  const [x1, y1, x2, y2] = bbox;
+  const W = img.naturalWidth;
+  const H = img.naturalHeight;
+  if (!W || !H) return;
+
+  const faceCX = (x1 + x2) / 2;
+  const faceCY = (y1 + y2) / 2;
+  const faceW  = x2 - x1;
+  const faceH  = y2 - y1;
+
+  // How large is the face relative to the image?
+  // We want the face to fill ~80% of the circular thumb (leaving a little padding).
+  // scale = thumbSize / (faceSize_in_px * (thumbSize/imageSize))
+  // Simplified: the img inside the circle has object-fit:cover.
+  // With object-fit:cover the img fills the container at its aspect ratio.
+  // We instead use a wrapper approach: no object-fit, manual transform.
+
+  // Percentage position: shift the image so face center aligns with thumb center.
+  // object-position X% Y% means: the X% point of the image aligns with
+  // the X% point of the container. So we want:
+  //   posX = faceCX / W * 100
+  //   posY = faceCY / H * 100
+  const posX = (faceCX / W) * 100;
+  const posY = (faceCY / H) * 100;
+
+  // Scale: we want the face to appear at ~70% of the thumb diameter.
+  // The thumb is square (CSS makes it a circle). The img has object-fit:cover
+  // which already fills the container. On top of that we need an extra scale
+  // so the face (faceH pixels tall) maps to thumbHeight * 0.7.
+  // The img rendered height (with object-fit:cover) = containerH if landscape,
+  // or containerH * (imgAR / containerAR) if portrait. We approximate:
+  // rendered face height in container = (faceH / H) * containerH_in_img_space
+  // where img_space_height = containerH when H/W <= containerH/containerW.
+  // Since thumb is square: containerAR = 1.
+  // img covers the square: rendered img H = max(containerH, containerH * H/W ... )
+  // Actually with object-fit:cover on a square:
+  //   renderedW = containerH * (W/H)  if W/H > 1 (landscape)
+  //   renderedH = containerH          always (the shorter side fills)
+  // So face height in rendered px = (faceH / H) * containerH
+  // We want that to be 0.70 * containerH → scale = 0.70 / (faceH/H)
+  // Cap scale so we don't zoom in absurdly on tiny faces.
+  const faceRatio = Math.min(faceW / W, faceH / H);
+  const targetRatio = 0.68; // face should fill 68% of the thumb
+  let scale = targetRatio / faceRatio;
+  scale = Math.min(Math.max(scale, 1.0), 6.0); // clamp 1× – 6×
+
+  img.style.objectFit      = 'cover';
+  img.style.objectPosition = `${posX.toFixed(1)}% ${posY.toFixed(1)}%`;
+  img.style.transform      = `scale(${scale.toFixed(2)})`;
+  img.style.transformOrigin = `${posX.toFixed(1)}% ${posY.toFixed(1)}%`;
+}
+
 function renderPeopleGrid(people) {
   const gridEl = document.getElementById('people-grid');
   if (!gridEl) return;
@@ -543,18 +633,26 @@ function renderPeopleGrid(people) {
   }
 
   gridEl.innerHTML = people.map((p, i) => {
-    const repPhoto  = photoMap[p.representative_photo_id] || photoMap[p.photo_ids?.[0]];
-    const thumbUrl  = repPhoto?.url || p.representative_url || '';
+    const repPhoto   = photoMap[p.representative_photo_id] || photoMap[p.photo_ids?.[0]];
+    const thumbUrl   = repPhoto?.url || p.representative_url || '';
+    const zoomData   = repPhoto ? faceZoomStyle(repPhoto) : null;
     const isSelected = state.mergeSelected.includes(i);
-    const clickFn   = state.mergeMode
+    const clickFn    = state.mergeMode
       ? `selectPersonForMerge(${i})`
       : `openPerson(${i})`;
+
+    // Encode bbox as a data attribute so the onload handler can apply zoom
+    const bboxAttr = zoomData
+      ? `data-bbox="${zoomData.bbox.join('_')}"`
+      : '';
 
     return `<div class="person-card${isSelected ? ' person-card-selected' : ''}"
         onclick="${clickFn}">
       <div class="person-thumb">
         ${thumbUrl
-          ? `<img src="${thumbUrl}" alt="Person ${p.person_index + 1}" loading="lazy">`
+          ? `<img src="${thumbUrl}" alt="Person ${p.person_index + 1}" loading="lazy"
+              ${bboxAttr}
+              onload="this.dataset.bbox && applyFaceZoom(this, this.dataset.bbox.split('_').map(Number))">`
           : `<div class="person-thumb-fallback">P${p.person_index + 1}</div>`}
         <div class="person-face-ring"></div>
         ${isSelected ? `<div style="position:absolute;inset:0;background:rgba(168,144,128,0.45);
