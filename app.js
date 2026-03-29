@@ -511,15 +511,11 @@ async function loadPeoplePanel() {
 }
 
 // Compute face-zoom CSS for a person-thumb image.
-// Given a face bbox [x1,y1,x2,y2] in the stored image's pixel space,
-// we use object-position to shift the img so the face center is centered
-// inside the circular thumb, and scale it up so the face fills the circle.
-//
-// person (optional) — pass the cluster object so we can pick the right face
-// when the representative photo contains multiple people. When provided and
-// the photo has multiple faces, we find the face whose embedding is most
-// similar to the centroid of the person's OTHER photos.  Falls back to the
-// highest-det_score face if we can't build a reference.
+// person (optional): when provided and the photo has >1 face, we pick the
+// face whose embedding best matches the person's cluster, so two folders
+// sharing the same thumbnail each zoom to their own person.
+// Falls back to highest-det_score face (original behaviour) if we can't
+// build a reference or there is only one face in the photo.
 function faceZoomStyle(repPhoto, person) {
   if (!repPhoto) return null;
 
@@ -530,30 +526,25 @@ function faceZoomStyle(repPhoto, person) {
   }
   if (!Array.isArray(meta) || !meta.length) return null;
 
-  // ── Pick which face in the photo belongs to this person ──────────────────
   let chosenIdx = -1;
 
-  // Only attempt embedding-based selection when there are multiple faces AND
-  // we were given a person object to build a reference from.
   if (meta.length > 1 && person) {
     try {
-      // Parse face_embeddings on the rep photo (one embedding per face, same
-      // order as face_metadata).
+      // face_embeddings on the photo: one embedding per face, same order as face_metadata
       let repEmbs = repPhoto.face_embeddings;
       if (typeof repEmbs === 'string') repEmbs = JSON.parse(repEmbs);
-      // Normalise flat single-embedding → array-of-arrays
       if (Array.isArray(repEmbs) && repEmbs.length && typeof repEmbs[0] === 'number') {
-        repEmbs = [repEmbs];
+        repEmbs = [repEmbs]; // flat single → wrap
       }
 
       if (Array.isArray(repEmbs) && repEmbs.length >= meta.length) {
-        // Build a reference centroid from the OTHER photos in this cluster.
+        // Build centroid from OTHER photos in this person's cluster
         const photoMap = {};
         for (const m of state.currentMedia) photoMap[m.id] = m;
 
         const refs = [];
         for (const pid of (person.photo_ids || [])) {
-          if (pid === repPhoto.id) continue;       // skip the shared photo itself
+          if (pid === repPhoto.id) continue;
           const m = photoMap[pid];
           if (!m) continue;
           let embs = m.face_embeddings;
@@ -567,13 +558,11 @@ function faceZoomStyle(repPhoto, person) {
         }
 
         if (refs.length) {
-          // Average into centroid
-          const dim      = refs[0].length;
+          const dim = refs[0].length;
           const centroid = new Array(dim).fill(0);
           for (const e of refs) for (let d = 0; d < dim; d++) centroid[d] += e[d];
           for (let d = 0; d < dim; d++) centroid[d] /= refs.length;
 
-          // Cosine similarity — pick the most similar face in the rep photo
           let bestSim = -Infinity;
           for (let i = 0; i < meta.length; i++) {
             const emb = repEmbs[i];
@@ -589,24 +578,18 @@ function faceZoomStyle(repPhoto, person) {
           }
         }
       }
-    } catch (_) {
-      // Any parse error → fall through to det_score fallback below
-    }
+    } catch (_) { /* fall through */ }
   }
 
   // Fallback: highest detection confidence (original behaviour)
   if (chosenIdx === -1) {
-    chosenIdx = meta.reduce(
-      (best, f, i) => (f.det_score > meta[best].det_score ? i : best), 0
-    );
+    chosenIdx = meta.reduce((best, f, i) => f.det_score > meta[best].det_score ? i : best, 0);
   }
 
-  const bbox = meta[chosenIdx].bbox; // [x1, y1, x2, y2]
+  const bbox = meta[chosenIdx].bbox;
   if (!Array.isArray(bbox) || bbox.length < 4) return null;
-
   const [x1, y1, x2, y2] = bbox;
   if (x2 - x1 <= 0 || y2 - y1 <= 0) return null;
-
   return { bbox: [x1, y1, x2, y2] };
 }
 
