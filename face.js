@@ -24,7 +24,8 @@ export function parseFaceEmbeddings(raw) {
     if (typeof p === 'string') p = JSON.parse(p); // double-encoded
     if (!Array.isArray(p) || !p.length) return null;
     if (typeof p[0] === 'number') return [p]; // flat single embedding
-    const valid = p.filter(e => Array.isArray(e) && e.length > 10);
+    // Keep any sub-array that looks like an embedding (at least 128-d)
+    const valid = p.filter(e => Array.isArray(e) && e.length >= 128);
     return valid.length ? valid : null;
   } catch {
     return null;
