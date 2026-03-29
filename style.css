@@ -630,7 +630,13 @@ nav {
   transition: border-color 0.18s;
 }
 .person-card:hover .person-thumb { border-color: var(--accent); }
-.person-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center top; }
+.person-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center center; /* default; JS overrides with face-zoom */
+  transition: transform 0.3s ease, object-position 0.3s ease;
+}
 .person-thumb-fallback {
   display: flex;
   align-items: center;
